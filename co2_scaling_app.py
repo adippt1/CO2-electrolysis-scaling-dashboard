@@ -1,7 +1,7 @@
 
 # co2_scaling_app.py
-# Streamlit CO2 Electrolysis Scaling Calculator (Stoich/Inlet + Utilization Sensitivity + Constants)
-# Author: ChatGPT (GPT-5 Thinking)
+# Streamlit CO2 Electrolysis Scaling Calculator (adds "Calc: Area from Inlet & Stoich")
+# Author: Aditya Prajapati + ChatGPT5 (Thinking)
 # Run with: streamlit run co2_scaling_app.py
 
 from dataclasses import dataclass
@@ -12,8 +12,8 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
-st.set_page_config(page_title="CO₂ Electrolysis Scaling Calculator",
-                   page_icon="🧮",
+st.set_page_config(page_title="CHEESE: CO₂ Handling & Electrolyzer Eficiency Scaling Evaluator",
+                   page_icon="🧀",
                    layout="wide")
 
 # -------------------- Constants --------------------
@@ -28,8 +28,8 @@ NE = {"CO": 2, "C2H4": 12}
 # Stoichiometric CO2 per mole product (carbon balance)
 STOICH_CO2_PER_PRODUCT = {"CO": 1.0, "C2H4": 2.0}
 # Standard potentials used for energy efficiency metric (fixed)
-E0_CO = 1.33   # V (user-specified convention)
-E0_C2H4 = 1.17 # V (user-specified convention)
+E0_CO = 1.33   # V
+E0_C2H4 = 1.17 # V
 
 # -------------------- Helpers --------------------
 def to_m2(area_value: float, area_unit: str) -> float:
@@ -55,6 +55,10 @@ def prod_mol_s(I: float, fe_frac: float, ne_per_mol: int) -> float:
 def mol_s_to_slpm(n_dot: float, molar_volume_L: float) -> float:
     """Convert mol/s to standard liters per minute (SLPM)."""
     return n_dot * molar_volume_L * 60.0
+
+def slpm_to_mol_s(flow_slpm: float, molar_volume_L: float) -> float:
+    """Convert SLPM to mol/s."""
+    return flow_slpm / (molar_volume_L * 60.0)
 
 def total_power_watts(I: float, V: float, n_units: int) -> float:
     return I * V * n_units
@@ -204,9 +208,16 @@ def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct:
 
 # -------------------- UI --------------------
 st.title("🧮 CO₂ Electrolysis Scaling Calculator")
-st.caption("CO₂ → CO and CO₂ → C₂H₄ | Core calculator + CO₂ utilization sensitivity (via Utilization and Stoich)")
+st.caption("CO₂ → CO and CO₂ → C₂H₄ | Two calculators + utilization sensitivity + area×stack + supply cap + constants")
 
-main_tabs = st.tabs(["Calculator", "Sensitivity: CO₂ Utilization", "Sensitivity: Area × Stack", "Sensitivity: CO₂ Supply Cap", "Constants"])
+main_tabs = st.tabs([
+    "Calculator",
+    "Calc: Area from Inlet & Stoich",
+    "Sensitivity: CO₂ Utilization",
+    "Sensitivity: Area × Stack",
+    "Sensitivity: CO₂ Supply Cap",
+    "Constants"
+])
 
 with main_tabs[0]:
     st.header("Calculator")
@@ -302,8 +313,78 @@ with main_tabs[0]:
     if feed["warning"]:
         st.warning(feed["warning"])
 
-# -------------------- Sensitivity: CO2 Utilization --------------------
+# -------------------- Calc: Area from Inlet & Stoich --------------------
 with main_tabs[1]:
+    st.header("Calc: Size Active Area from CO₂ Inlet & Stoich")
+    st.caption("Give **CO₂ inlet (SLPM)**, **Stoich S**, **current density**, and FE. The tool computes the required **active area** to process that feed.")
+
+    with st.sidebar:
+        st.subheader("Sizing Settings")
+        mv_label_s = st.selectbox("Gas molar volume basis (sizing)", list(MV_OPTIONS.keys()), index=0, key="mv_sizing")
+        molar_vol_s = MV_OPTIONS[mv_label_s]
+        use_stack_s = st.checkbox("Use a stack?", value=True, key="stack_sizing")
+        n_units_s = st.number_input("# Units (for per-unit area)", min_value=1, value=10, step=1, key="units_sizing")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        co2_in_slpm_sz = st.number_input("CO₂ Inlet (SLPM)", min_value=0.0, value=50.0, step=1.0, key="sz_inlet")
+        S_sz = st.number_input("Stoich S (inlet/min)", min_value=1.0, value=2.0, step=0.1, key="sz_S")
+    with col2:
+        j_val_sz = st.number_input("Current density", min_value=0.0, value=200.0, step=10.0, key="sz_j")
+        j_unit_sz = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="sz_ju")
+        V_cell_sz = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="sz_V")
+    with col3:
+        feco_sz = st.number_input("FE to CO (%)", min_value=0.0, max_value=100.0, value=90.0, step=1.0, key="sz_feco")
+        fec2h4_sz = st.number_input("FE to C₂H₄ (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="sz_fec2h4")
+
+    # Convert and compute
+    j_A_m2_sz = to_A_per_m2(j_val_sz, j_unit_sz)
+    co2_min_slpm_sz = co2_in_slpm_sz / max(1e-12, S_sz)
+    co2_min_mol_s_sz = slpm_to_mol_s(co2_min_slpm_sz, molar_vol_s)
+
+    # Determine total current required from carbon balance + FE split:
+    fe_co_frac = fe_to_frac(feco_sz)
+    fe_c2h4_frac = fe_to_frac(fec2h4_sz)
+    denom = (fe_co_frac/2.0) + (fe_c2h4_frac/6.0)  # [FE_CO/2 + FE_C2H4/6]
+    if denom <= 1e-12:
+        st.error("FE split yields zero carbon products (FE_CO/2 + FE_C2H4/6 = 0). Increase FE to CO and/or C₂H₄.")
+    else:
+        I_total_sz = co2_min_mol_s_sz * F / denom  # A
+        A_total_m2 = I_total_sz / max(1e-12, j_A_m2_sz)  # m²
+        A_total_cm2 = A_total_m2 * 1e4
+        units_used = n_units_s if use_stack_s else 1
+        A_per_unit_m2 = A_total_m2 / units_used
+        A_per_unit_cm2 = A_per_unit_m2 * 1e4
+
+        # Product rates at this size (consistency check)
+        n_CO_sz = prod_mol_s(I_total_sz, fe_co_frac, NE["CO"])
+        n_C2H4_sz = prod_mol_s(I_total_sz, fe_c2h4_frac, NE["C2H4"])
+        CO_slpm_sz = mol_s_to_slpm(n_CO_sz, molar_vol_s)
+        C2H4_slpm_sz = mol_s_to_slpm(n_C2H4_sz, molar_vol_s)
+
+        P_total_kW_sz = (I_total_sz * V_cell_sz) / 1000.0
+        util_sz = 1.0 / S_sz
+
+        st.subheader("Sizing Results")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.metric("Total active area (m²)", f"{A_total_m2:.3f}")
+            st.metric("Total current (A)", f"{I_total_sz:.1f}")
+        with c2:
+            st.metric("Per-unit area (m²)", f"{A_per_unit_m2:.4f}")
+            st.metric("Power (kW)", f"{P_total_kW_sz:.2f}")
+        with c3:
+            st.metric("CO₂ Minimum (SLPM)", f"{co2_min_slpm_sz:.3f}")
+            st.metric("Utilization (%)", f"{util_sz*100:.1f}")
+
+        st.caption("Per-unit metrics assume equal area per unit. If you uncheck 'Use a stack', results are for a single unit.")
+
+        st.subheader("Resulting Product Rates (for sized area)")
+        st.write(f"- CO: **{CO_slpm_sz:.3f} SLPM**")
+        st.write(f"- C₂H₄: **{C2H4_slpm_sz:.3f} SLPM**")
+
+# -------------------- Sensitivity: CO2 Utilization --------------------
+with main_tabs[2]:
     st.header("Sensitivity: CO₂ Utilization")
     st.caption("Sweep **Utilization (%)** as the independent variable for outlet flows (left). The composition vs **Stoich S** plot (right) is also shown. FE is held constant.")
 
@@ -374,7 +455,7 @@ with main_tabs[1]:
     )
 
 # -------------------- Sensitivity: Area × Stack --------------------
-with main_tabs[2]:
+with main_tabs[3]:
     st.header("Sensitivity: Area × Stack")
     st.caption("Sweep active area per unit and # of units. Visualize production, power, and CO₂ needs.")
     mv_label1 = st.selectbox("Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="mv1")
@@ -445,7 +526,7 @@ with main_tabs[2]:
     )
 
 # -------------------- Sensitivity: CO2 Supply Cap --------------------
-with main_tabs[3]:
+with main_tabs[4]:
     st.header("Sensitivity: CO₂ Supply Cap")
     st.caption("Impose a maximum CO₂ inlet and evaluate feasibility, utilization, and recommendations.")
     mv_label2 = st.selectbox("Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="mv2")
@@ -495,7 +576,7 @@ with main_tabs[3]:
         st.success("Feasible. You may increase utilization up to the shown maximum by reducing S accordingly.")
 
 # -------------------- Constants --------------------
-with main_tabs[4]:
+with main_tabs[5]:
     st.header("Constants & Reference Reactions")
     st.markdown(f"""
 - **Faraday constant (F):** {F:.5f} C·mol⁻¹ e⁻  
