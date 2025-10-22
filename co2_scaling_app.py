@@ -1,8 +1,8 @@
-
-# co2_scaling_app.py
-# Streamlit CO2 Electrolysis Scaling Calculator (adds "Calc: Area from Inlet & Stoich")
-# Author: Aditya Prajapati + ChatGPT5 (Thinking)
-# Run with: streamlit run co2_scaling_app.py
+# cheese_app.py
+# CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator
+# Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
+# Author: Aditya Prajapati +ChatGPT (GPT-5 Thinking)
+# Run with: streamlit run cheese_app.py
 
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -12,9 +12,11 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
-st.set_page_config(page_title="CHEESE: CO₂ Handling & Electrolyzer Eficiency Scaling Evaluator",
-                   page_icon="🧀",
-                   layout="wide")
+st.set_page_config(
+    page_title="CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator",
+    page_icon="🧀",
+    layout="wide"
+)
 
 # -------------------- Constants --------------------
 F = 96485.33212  # C/mol e-
@@ -128,14 +130,16 @@ def apply_feed_mode(core: Dict[str, float], inp: ElectrolyzerInputs) -> Dict[str
         co2_in_slpm = S * co2_min_slpm
         util = 1.0 / S
         warn = None
-
     else:  # "INLET"
         co2_in_slpm_raw = max(0.0, float(inp.co2_in_slpm_input or 0.0))
         if co2_in_slpm_raw < co2_min_slpm:
             S = max(1e-12, co2_in_slpm_raw / co2_min_slpm)
             util = min(1.0, 1.0 / S)  # will be >1; cap at 1
             co2_in_slpm = co2_in_slpm_raw
-            warn = f"Provided CO₂ inlet ({co2_in_slpm_raw:.3f} SLPM) is below the theoretical minimum ({co2_min_slpm:.3f} SLPM). Product rates assume Faradaic production; physically you'd be CO₂-limited."
+            warn = (
+                f"Provided CO₂ inlet ({co2_in_slpm_raw:.3f} SLPM) is below the theoretical minimum "
+                f"({co2_min_slpm:.3f} SLPM). Product rates assume Faradaic production; physically you'd be CO₂-limited."
+            )
         else:
             S = co2_in_slpm_raw / co2_min_slpm
             util = 1.0 / S
@@ -207,18 +211,20 @@ def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct:
     return pd.DataFrame(rows)
 
 # -------------------- UI --------------------
-st.title("🧮 CO₂ Electrolysis Scaling Calculator")
+st.title("🧀 CHEESE: CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
+st.caption("Because scaling electrolysis shouldn’t be this gouda! 🧀")
 st.caption("CO₂ → CO and CO₂ → C₂H₄ | Two calculators + utilization sensitivity + area×stack + supply cap + constants")
 
 main_tabs = st.tabs([
     "Calculator",
-    "Calc: Area from Inlet & Stoich",
+    "Calc: Size Active Area from CO₂ Inlet & Stoich",
     "Sensitivity: CO₂ Utilization",
     "Sensitivity: Area × Stack",
     "Sensitivity: CO₂ Supply Cap",
     "Constants"
 ])
 
+# -------------------- Calculator --------------------
 with main_tabs[0]:
     st.header("Calculator")
     with st.sidebar:
@@ -255,8 +261,10 @@ with main_tabs[0]:
     stoich_ratio = None
     co2_in_slpm_input = None
     if mode == "Stoich (S)":
-        stoich_ratio = st.number_input("CO₂ Stoichiometric Ratio S (inlet/min)", min_value=1.0, value=2.0, step=0.1,
-                                       help="S = CO₂_in / CO₂_min. S=1 → 100% utilization. Higher S → more excess CO₂ and lower utilization.", key="s0")
+        stoich_ratio = st.number_input(
+            "CO₂ Stoichiometric Ratio S (inlet/min)", min_value=1.0, value=2.0, step=0.1,
+            help="S = CO₂_in / CO₂_min. S=1 → 100% utilization. Higher S → more excess CO₂ and lower utilization.", key="s0"
+        )
         mode_key = "S"
     else:
         co2_in_slpm_input = st.number_input("CO₂ Inlet flow (SLPM)", min_value=0.0, value=10.0, step=0.5, key="inlet0")
@@ -313,7 +321,7 @@ with main_tabs[0]:
     if feed["warning"]:
         st.warning(feed["warning"])
 
-# -------------------- Calc: Area from Inlet & Stoich --------------------
+# -------------------- Calc: Size Active Area from CO₂ Inlet & Stoich --------------------
 with main_tabs[1]:
     st.header("Calc: Size Active Area from CO₂ Inlet & Stoich")
     st.caption("Give **CO₂ inlet (SLPM)**, **Stoich S**, **current density**, and FE. The tool computes the required **active area** to process that feed.")
@@ -346,6 +354,7 @@ with main_tabs[1]:
     fe_co_frac = fe_to_frac(feco_sz)
     fe_c2h4_frac = fe_to_frac(fec2h4_sz)
     denom = (fe_co_frac/2.0) + (fe_c2h4_frac/6.0)  # [FE_CO/2 + FE_C2H4/6]
+
     if denom <= 1e-12:
         st.error("FE split yields zero carbon products (FE_CO/2 + FE_C2H4/6 = 0). Increase FE to CO and/or C₂H₄.")
     else:
@@ -365,13 +374,28 @@ with main_tabs[1]:
         P_total_kW_sz = (I_total_sz * V_cell_sz) / 1000.0
         util_sz = 1.0 / S_sz
 
+        # ---- Toggle to show resultant area in cm² instead of m² ----
+        show_cm2 = st.toggle("Display resultant area in cm²", value=False, key="sz_toggle")
+        if show_cm2:
+            area_unit_label = "cm²"
+            total_area_display = A_total_cm2
+            per_unit_area_display = A_per_unit_cm2
+            fmt_total = "{:,.0f}"        # typically large numbers in cm²
+            fmt_per_unit = "{:,.0f}"
+        else:
+            area_unit_label = "m²"
+            total_area_display = A_total_m2
+            per_unit_area_display = A_per_unit_m2
+            fmt_total = "{:.3f}"
+            fmt_per_unit = "{:.4f}"
+
         st.subheader("Sizing Results")
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.metric("Total active area (m²)", f"{A_total_m2:.3f}")
+            st.metric(f"Total active area ({area_unit_label})", fmt_total.format(total_area_display))
             st.metric("Total current (A)", f"{I_total_sz:.1f}")
         with c2:
-            st.metric("Per-unit area (m²)", f"{A_per_unit_m2:.4f}")
+            st.metric(f"Per-unit area ({area_unit_label})", fmt_per_unit.format(per_unit_area_display))
             st.metric("Power (kW)", f"{P_total_kW_sz:.2f}")
         with c3:
             st.metric("CO₂ Minimum (SLPM)", f"{co2_min_slpm_sz:.3f}")
@@ -419,9 +443,11 @@ with main_tabs[2]:
     df_util = build_sensitivity_table_U(core_u, Umin, Umax, Ustep)
 
     # Left chart: Outlet flows vs Utilization (%)
-    df_flows = df_util.melt(id_vars=["Utilization (%)"],
-                            value_vars=["CO2 Outlet (SLPM)", "CO (SLPM)", "C2H4 (SLPM)"],
-                            var_name="Stream", value_name="SLPM")
+    df_flows = df_util.melt(
+        id_vars=["Utilization (%)"],
+        value_vars=["CO2 Outlet (SLPM)", "CO (SLPM)", "C2H4 (SLPM)"],
+        var_name="Stream", value_name="SLPM"
+    )
     chart_flows = alt.Chart(df_flows).mark_line(point=True).encode(
         x=alt.X("Utilization (%):Q"),
         y=alt.Y("SLPM:Q"),
@@ -431,9 +457,11 @@ with main_tabs[2]:
 
     # Right chart: Composition vs S (derived from Utilization)
     df_sens_S = build_sensitivity_table_S(core_u, S_min=1.0, S_max=max(1.0, 1.0/(Umin/100.0)), S_step=0.5)
-    df_comp = df_sens_S.melt(id_vars=["Stoich S (inlet/min)"],
-                             value_vars=["CO2 vol%", "CO vol%", "C2H4 vol%"],
-                             var_name="Species", value_name="vol%")
+    df_comp = df_sens_S.melt(
+        id_vars=["Stoich S (inlet/min)"],
+        value_vars=["CO2 vol%", "CO vol%", "C2H4 vol%"],
+        var_name="Species", value_name="vol%"
+    )
     chart_comp = alt.Chart(df_comp).mark_line(point=True).encode(
         x=alt.X("Stoich S (inlet/min):Q"),
         y=alt.Y("vol%:Q"),
@@ -494,7 +522,10 @@ with main_tabs[3]:
             n_C2H4 = prod_mol_s(I_total, fe_c2h41, NE["C2H4"])
             CO_slpm = mol_s_to_slpm(n_CO, molar_vol1)
             C2H4_slpm = mol_s_to_slpm(n_C2H4, molar_vol1)
-            co2_min_slpm = mol_s_to_slpm(n_CO * STOICH_CO2_PER_PRODUCT["CO"] + n_C2H4 * STOICH_CO2_PER_PRODUCT["C2H4"], molar_vol1)
+            co2_min_slpm = mol_s_to_slpm(
+                n_CO * STOICH_CO2_PER_PRODUCT["CO"] + n_C2H4 * STOICH_CO2_PER_PRODUCT["C2H4"],
+                molar_vol1
+            )
             co2_in_slpm = S1 * co2_min_slpm
             P_total_kW = (I_total * V_cell1) / 1000.0
             rows.append({
@@ -554,7 +585,10 @@ with main_tabs[4]:
     fe_co2, fe_c2h42 = fe_to_frac(fe_co_pct2), fe_to_frac(fe_c2h4_pct2)
     n_CO = prod_mol_s(I_total, fe_co2, NE["CO"])
     n_C2H4 = prod_mol_s(I_total, fe_c2h42, NE["C2H4"])
-    co2_min_slpm2 = mol_s_to_slpm(n_CO * STOICH_CO2_PER_PRODUCT["CO"] + n_C2H4 * STOICH_CO2_PER_PRODUCT["C2H4"], molar_vol2)
+    co2_min_slpm2 = mol_s_to_slpm(
+        n_CO * STOICH_CO2_PER_PRODUCT["CO"] + n_C2H4 * STOICH_CO2_PER_PRODUCT["C2H4"],
+        molar_vol2
+    )
     P_total_kW2 = (I_total * V_cell2) / 1000.0
     S_min_cap = (co2_cap / co2_min_slpm2) if co2_min_slpm2 > 0 else np.inf
     util_max_cap = min(1.0, 1.0 / max(1e-12, S_min_cap))
@@ -586,10 +620,11 @@ with main_tabs[5]:
 - **Energy efficiency definition:** EE = Σ (E₀ / E_cell × FE). Using fixed E₀ values: E₀(CO) = {E0_CO:.2f} V, E₀(C₂H₄) = {E0_C2H4:.2f} V  
 - **Relationships:** Stoich **S = CO₂_in / CO₂_min**; Utilization **U = 1/S**
 """)
+
     st.subheader("Reference overall reactions (showing e⁻ counts)")
     st.markdown(r"""
 - **CO₂ → CO (2 e⁻ per CO):**  
-  In aqueous notation (alkaline): **CO₂ + H₂O + 2 e⁻ → CO + 2 OH⁻**  
+  In aqueous notation (alkaline): **CO₂ + H₂O + 2 e⁻ → CO + 2 OH⁻**
 - **CO₂ → C₂H₄ (12 e⁻ per C₂H₄):**  
   One overall representation (acidic): **2 CO₂ + 12 e⁻ + 8 H⁺ → C₂H₄ + 4 H₂O**
 """)
