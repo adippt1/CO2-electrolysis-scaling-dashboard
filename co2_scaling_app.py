@@ -2,7 +2,6 @@
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
 # Author: Aditya Prajapati + ChatGPT (GPT-5 Thinking)
 # Copyright (c) 2025 Aditya Prajapati
-# October 24 2025: Code is too big for me now. Help!
 
 from dataclasses import dataclass
 from typing import Dict, Optional, List
@@ -21,9 +20,14 @@ st.set_page_config(
 
 st.markdown("""
 <style>
+/* Tight, consistent inputs */
 .block-container {max-width: 1250px;}
 div[data-testid="stMetric"] {text-align:center;}
 div[data-testid="stMetric"] > label {justify-content:center;}
+/* Make number inputs more compact and consistent width */
+section[data-testid="stSidebar"] .stNumberInput > div > div { width: 100%; }
+.stNumberInput label p, .stSelectbox label p { font-weight: 600; }
+.fe-grid .stNumberInput > div > div { min-width: 160px; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -53,7 +57,7 @@ DEFAULT_PRODUCTS = {
     "CH3OH":   {"n_e": 6,  "co2_per_mol": 1.0, "E0": 0.02},
     "C2H5OH":  {"n_e": 12, "co2_per_mol": 2.0, "E0": 0.08},
     "MGO":     {"n_e": 12, "co2_per_mol": 3.0, "E0": 0.10},  # methylglyoxal (C3)
-    "HCOO-":    {"n_e": 2,  "co2_per_mol": 1.0, "E0": 0.20},  # formate
+    "HCOO":    {"n_e": 2,  "co2_per_mol": 1.0, "E0": 0.20},  # formate
 }
 if "PRODUCTS" not in st.session_state:
     st.session_state.PRODUCTS = DEFAULT_PRODUCTS.copy()
@@ -89,8 +93,81 @@ def slpm_to_mol_s(flow_slpm: float, molar_volume_L: float) -> float:
 def total_power_watts(I: float, V: float, n_units: int) -> float:
     return I * V * max(1, n_units)
 
-def sum_fe_cap(*fes: float) -> float:
-    return min(100.0, max(0.0, sum([f or 0.0 for f in fes])))
+# ---------- UI helpers for clean FE alignment ----------
+def fe_grid_inputs(
+    section_key: str,
+    products: List[str],
+    default_map: Optional[Dict[str, float]] = None,
+    title: str = "Faradaic Efficiencies (%, sum ≤ 100)",
+    per_row: int = 3
+) -> Dict[str, float]:
+    """Render a neatly aligned grid of FE (%) number_inputs, returning {product: value}."""
+    st.markdown(f"#### {title}")
+    fe_map: Dict[str, float] = {}
+    # fallback defaults: CO=90, others 0
+    defaults = {p: (90.0 if p == "CO" else 0.0) for p in products}
+    if default_map:
+        defaults.update({k: float(default_map.get(k, defaults[k])) for k in products})
+
+    # rows of 'per_row' products
+    for i in range(0, len(products), per_row):
+        row = products[i:i+per_row]
+        cols = st.columns(len(row), gap="small")
+        with st.container():
+            st.markdown('<div class="fe-grid">', unsafe_allow_html=True)
+            for c, p in enumerate(row):
+                with cols[c]:
+                    fe_map[p] = st.number_input(
+                        f"{p} FE (%)",
+                        min_value=0.0, max_value=100.0,
+                        value=defaults[p],
+                        step=1.0,
+                        key=f"{section_key}_fe_{p}"
+                    )
+            st.markdown("</div>", unsafe_allow_html=True)
+    return fe_map
+
+def fe_mean_stdev_grid(
+    section_key: str,
+    products: List[str],
+    mean_defaults: Optional[Dict[str, float]] = None,
+    stdev_defaults: Optional[Dict[str, float]] = None,
+    title: str = "FE means & stdevs",
+    per_row: int = 3
+):
+    """Aligned grid for Monte Carlo: per product column: mean (%) then stdev (%)."""
+    st.subheader(title)
+    mean_def = {p: (90.0 if p == "CO" else 0.0) for p in products}
+    if mean_defaults:
+        mean_def.update({k: float(mean_defaults.get(k, mean_def[k])) for k in products})
+    sd_def = {p: (2.0 if p == "CO" else 1.0) for p in products}
+    if stdev_defaults:
+        sd_def.update({k: float(stdev_defaults.get(k, sd_def[k])) for k in products})
+
+    fe_mean: Dict[str, float] = {}
+    fe_sd: Dict[str, float] = {}
+
+    for i in range(0, len(products), per_row):
+        row = products[i:i+per_row]
+        cols = st.columns(len(row), gap="small")
+        for c, p in enumerate(row):
+            with cols[c]:
+                st.markdown(f"**{p}**")
+                fe_mean[p] = st.number_input(
+                    "mean (%)",
+                    min_value=0.0, max_value=100.0,
+                    value=mean_def[p],
+                    step=1.0,
+                    key=f"{section_key}_mean_{p}"
+                )
+                fe_sd[p] = st.number_input(
+                    "stdev (%)",
+                    min_value=0.0, max_value=100.0,
+                    value=sd_def[p],
+                    step=0.5,
+                    key=f"{section_key}_sd_{p}"
+                )
+    return fe_mean, fe_sd
 
 # -------------------- Data class --------------------
 @dataclass
@@ -142,7 +219,6 @@ def apply_feed_mode(core: Dict[str, float], inp: ElectrolyzerInputs) -> Dict[str
     co2_min_slpm = max(core["CO2_min_slpm"], 0.0)
 
     if co2_min_slpm <= EPS:
-        # Degenerate: no carbon products
         if inp.mode == "S":
             S = max(1.0, float(inp.stoich_ratio or 1.0))
             co2_in_slpm = 0.0
@@ -238,7 +314,7 @@ st.sidebar.markdown("---")
 
 # -------------------- UI --------------------
 st.title("🧀 CHEESE: CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
-st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO, HCOO- | Calculators + sensitivities + Monte Carlo")
+st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO, HCOO | Calculators + sensitivities + Monte Carlo")
 
 main_tabs = st.tabs([
     "Calculator",
@@ -263,13 +339,7 @@ with main_tabs[0]:
     with colC:
         V_cell = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="calc_V")
 
-    st.markdown("#### Faradaic Efficiencies (%, sum ≤ 100)")
-    fe_map_pct: Dict[str, float] = {}
-    fe_cols = st.columns(len(PRODUCT_LIST))
-    for i, p in enumerate(PRODUCT_LIST):
-        with fe_cols[i]:
-            fe_map_pct[p] = st.number_input(f"FE to {p}", min_value=0.0, max_value=100.0,
-                                            value=90.0 if p == "CO" else 0.0, step=1.0, key=f"calc_fe_{p}")
+    fe_map_pct = fe_grid_inputs("calc", PRODUCT_LIST)
 
     st.divider()
     mode = st.radio("CO₂ feed input mode", ["Stoich (S)", "Inlet flow (SLPM)"], index=0, horizontal=True, key="calc_mode")
@@ -333,13 +403,7 @@ with main_tabs[1]:
         j_unit_sz = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="sz_j_unit")
         V_cell_sz = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="sz_V")
     with col3:
-        st.write("FE split (%)")
-        fe_map_sz = {}
-        fcols = st.columns(len(PRODUCT_LIST))
-        for i, p in enumerate(PRODUCT_LIST):
-            with fcols[i]:
-                fe_map_sz[p] = st.number_input(p, min_value=0.0, max_value=100.0,
-                                               value=90.0 if p == "CO" else 0.0, step=1.0, key=f"sz_fe_{p}")
+        fe_map_sz = fe_grid_inputs("sz", PRODUCT_LIST, title="FE split (%)", per_row=3)
 
     j_A_m2_sz = to_A_per_m2(j_val_sz, j_unit_sz)
     co2_min_slpm_sz = co2_in_slpm_sz / max(S_sz, EPS)
@@ -416,13 +480,7 @@ with main_tabs[2]:
         j_u = st.number_input("Current density (mA/cm²)", min_value=0.0, value=200.0, step=10.0, key="u_j")
         V_u = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="u_V")
     with col2:
-        fe_map_u = {}
-        st.write("FE split (%)")
-        ucols = st.columns(len(PRODUCT_LIST))
-        for i, p in enumerate(PRODUCT_LIST):
-            with ucols[i]:
-                fe_map_u[p] = st.number_input(f"{p}", min_value=0.0, max_value=100.0,
-                                              value=90.0 if p == "CO" else 0.0, step=1.0, key=f"u_fe_{p}")
+        fe_map_u = fe_grid_inputs("u", PRODUCT_LIST, title="FE split (%)", per_row=3)
         units_u = n_units_global if use_stack_global else 1
         st.info(f"Using global stack setting: {units_u} unit(s).")
     with col3:
@@ -494,13 +552,7 @@ with main_tabs[3]:
         j_unit1 = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="axs_j_unit")
         V_cell1 = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="axs_V")
     with col2:
-        st.write("FE split (%)")
-        fe_map1 = {}
-        fcols = st.columns(len(PRODUCT_LIST))
-        for i, p in enumerate(PRODUCT_LIST):
-            with fcols[i]:
-                fe_map1[p] = st.number_input(f"{p}", min_value=0.0, max_value=100.0,
-                                             value=90.0 if p=="CO" else 0.0, step=1.0, key=f"axs_fe_{p}")
+        fe_map1 = fe_grid_inputs("axs", PRODUCT_LIST, title="FE split (%)", per_row=3)
         S1 = st.number_input("Stoich S for sweep", min_value=1.0, value=2.0, step=0.1, key="axs_S")
     with col3:
         area_min = st.number_input("Area per unit - min (cm²)", min_value=0.0, value=25.0, step=5.0, key="axs_area_min")
@@ -577,13 +629,7 @@ with main_tabs[4]:
         j_unit2 = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="cap_j_unit")
     with col2:
         V_cell2 = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="cap_V")
-        st.write("FE split (%)")
-        fe_map2 = {}
-        fcols2 = st.columns(len(PRODUCT_LIST))
-        for i, p in enumerate(PRODUCT_LIST):
-            with fcols2[i]:
-                fe_map2[p] = st.number_input(f"{p}", min_value=0.0, max_value=100.0,
-                                             value=90.0 if p=="CO" else 0.0, step=1.0, key=f"cap_fe_{p}")
+        fe_map2 = fe_grid_inputs("cap", PRODUCT_LIST, title="FE split (%)", per_row=3)
     with col3:
         n_units2 = n_units_global if use_stack_global else 1
         st.info(f"Using global stack setting: {n_units2} unit(s).")
@@ -645,18 +691,7 @@ with main_tabs[5]:
         S_cv = st.number_input("S coefficient of variation (%)", min_value=0.0, value=5.0, step=0.5, key="mc_S_cv")
 
     with right:
-        st.subheader("FE means & stdevs")
-        fe_mean = {}
-        fe_sd = {}
-        cols1 = st.columns(len(PRODUCT_LIST))
-        cols2 = st.columns(len(PRODUCT_LIST))
-        for i, p in enumerate(PRODUCT_LIST):
-            with cols1[i]:
-                fe_mean[p] = st.number_input(f"FE {p} mean (%)", min_value=0.0, max_value=100.0,
-                                             value=90.0 if p=="CO" else 0.0, step=1.0, key=f"mc_fe_m_{p}")
-            with cols2[i]:
-                fe_sd[p] = st.number_input(f"FE {p} stdev (%)", min_value=0.0, max_value=100.0,
-                                           value=2.0 if p=="CO" else 1.0, step=0.5, key=f"mc_fe_s_{p}")
+        fe_mean, fe_sd = fe_mean_stdev_grid("mc", PRODUCT_LIST)
 
     def lognormal_samples(mean, cv_pct, size):
         if mean <= 0:
