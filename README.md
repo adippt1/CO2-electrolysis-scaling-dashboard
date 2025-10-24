@@ -18,7 +18,10 @@ CHEESE is an interactive Streamlit dashboard (or Cheeseboard) for CO₂ handling
 - **Sensitivity — CO₂ Utilization:** Sweep U (%) and visualize outlet flows and composition vs. S.
 - **Sensitivity — Area × Stack:** Heatmap for production/power vs. per‑unit area and number of units.
 - **Sensitivity — CO₂ Supply Cap:** Feasibility under a supply constraint with recommendations.
-- **Single source of truth:** **Global settings** for STP/SATP gas basis and stack size shared across all tabs.
+- **Global settings — ** for STP/SATP gas basis and stack size shared across all tabs.
+---
+## Pun Warning
+The author will not be apologizing for the use of pun(s)
 
 ---
 
@@ -34,5 +37,3 @@ pip install streamlit numpy pandas altair
 # 3) (Optional) Pin versions for reproducibility
 pip install "streamlit==1.*" "numpy==1.*" "pandas==2.*" "altair==5.*"
 
-## Other comments
-The author will not be apologizing for the use of pun(s)
