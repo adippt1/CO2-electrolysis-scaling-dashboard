@@ -2,7 +2,7 @@
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
 # Author: Aditya Prajapati + ChatGPT (GPT-5 Thinking)
 # Copyright (c) 2025 Aditya Prajapati
-#edit Oct 24 2025: The code is too big for me now. Help!
+# October 24 2025: Code is too big for me now. Help!
 
 from dataclasses import dataclass
 from typing import Dict, Optional, List
@@ -53,6 +53,7 @@ DEFAULT_PRODUCTS = {
     "CH3OH":   {"n_e": 6,  "co2_per_mol": 1.0, "E0": 0.02},
     "C2H5OH":  {"n_e": 12, "co2_per_mol": 2.0, "E0": 0.08},
     "MGO":     {"n_e": 12, "co2_per_mol": 3.0, "E0": 0.10},  # methylglyoxal (C3)
+    "HCOO-":    {"n_e": 2,  "co2_per_mol": 1.0, "E0": 0.20},  # formate
 }
 if "PRODUCTS" not in st.session_state:
     st.session_state.PRODUCTS = DEFAULT_PRODUCTS.copy()
@@ -237,7 +238,7 @@ st.sidebar.markdown("---")
 
 # -------------------- UI --------------------
 st.title("🧀 CHEESE: CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
-st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO | Calculators + sensitivities + Monte Carlo")
+st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO, HCOO- | Calculators + sensitivities + Monte Carlo")
 
 main_tabs = st.tabs([
     "Calculator",
