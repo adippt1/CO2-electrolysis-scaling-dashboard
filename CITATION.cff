@@ -5,11 +5,7 @@ authors:
 - family-names: Prajapati
 given-names: Aditya
 affiliation: Lawrence Livermore National Laboratory
-orcid: ""
+orcid: "https://orcid.org/0000-0001-8284-5493"
 version: "1.0.0"
 date-released: 2025-10-23
 repository-code: https://github.com/adippt1/CO2-electrolysis-scaling-dashboard
-abstract: >-
-CHEESE is an interactive Streamlit dashboard that helps size and analyze
-CO₂ electrolysis systems from lab to stack scale, including stoichiometry,
-utilization, and gas handling considerations.
