@@ -23,7 +23,9 @@ with st.sidebar:
     st.markdown(
         """
         ---
-        **Created by [Aditya Prajapati (Adi)](https://people.llnl.gov/prajapati3)**  
+        **Created by 
+        
+        [Aditya Prajapati (Adi)](https://people.llnl.gov/prajapati3)**  
         ---
         """,
         unsafe_allow_html=True
