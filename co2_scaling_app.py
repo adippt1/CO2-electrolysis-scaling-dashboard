@@ -1,9 +1,7 @@
-
 # CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
-# Author: Aditya Prajapati +ChatGPT (GPT-5 Thinking)
+# Author: Aditya Prajapati + ChatGPT (GPT-5 Thinking)
 # Copyright (c) 2025 Aditya Prajapati
-
 
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -13,23 +11,25 @@ import pandas as pd
 import altair as alt
 import streamlit as st
 
+# -------------------- Page & Sidebar Author Credit --------------------
 st.set_page_config(
     page_title="CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator",
     page_icon="🧀",
     layout="wide"
 )
+
 # --- Author credit in sidebar ---
 with st.sidebar:
     st.markdown(
         """
         ---
-        **Created by** 
-        
-        **[Aditya Prajapati (Adi)](https://people.llnl.gov/prajapati3)**  
+        **Created by**  
+        **[Aditya Prajapati (Adi)](https://people.llnl.gov/prajapati3)**
         ---
         """,
         unsafe_allow_html=True
     )
+
 # -------------------- Constants --------------------
 F = 96485.33212  # C/mol e-
 # Molar volume options (L/mol)
@@ -222,6 +222,22 @@ def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct:
         })
     return pd.DataFrame(rows)
 
+# -------------------- Global Settings (Single Source of Truth) --------------------
+st.sidebar.header("Global Settings")
+mv_label_global = st.sidebar.selectbox(
+    "Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="mv_global"
+)
+molar_vol_global = MV_OPTIONS[mv_label_global]
+
+use_stack_global = st.sidebar.checkbox(
+    "Use a stack (multiple identical units)?", value=True, key="stack_global"
+)
+n_units_global = st.sidebar.number_input(
+    "Number of units in stack", min_value=1, value=10, step=1, key="units_global"
+)
+
+st.sidebar.markdown("---")
+
 # -------------------- UI --------------------
 st.title("🧀 CHEESE: CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
 st.caption("Because scaling electrolysis shouldn’t be this gouda! 🧀")
@@ -239,15 +255,6 @@ main_tabs = st.tabs([
 # -------------------- Calculator --------------------
 with main_tabs[0]:
     st.header("Calculator")
-    with st.sidebar:
-        st.header("Global Settings")
-        mv_label = st.selectbox("Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="mv0")
-        molar_vol = MV_OPTIONS[mv_label]
-
-        st.write("---")
-        st.subheader("Stack Configuration")
-        use_stack = st.checkbox("Use a stack (multiple identical units)?", value=True, key="stack0")
-        n_units = st.number_input("Number of units in stack", min_value=1, value=10, step=1, key="units0")
 
     # Core inputs
     colA, colB, colC = st.columns(3)
@@ -282,8 +289,13 @@ with main_tabs[0]:
         co2_in_slpm_input = st.number_input("CO₂ Inlet flow (SLPM)", min_value=0.0, value=10.0, step=0.5, key="inlet0")
         mode_key = "INLET"
 
-    if not use_stack:
-        n_units = 1
+    # Use global settings
+    molar_vol = molar_vol_global
+    n_units_effective = n_units_global if use_stack_global else 1
+
+    # Warn if FE sum > 100 (we still cap inside fe_to_frac)
+    if fe_co_pct + fe_c2h4_pct > 100:
+        st.warning("Total FE exceeds 100%. Values will be capped to 100% in calculations.")
 
     inp = ElectrolyzerInputs(
         area_value=area_value,
@@ -293,7 +305,7 @@ with main_tabs[0]:
         V_cell=V_cell,
         fe_co_pct=fe_co_pct,
         fe_c2h4_pct=fe_c2h4_pct,
-        n_units=n_units,
+        n_units=n_units_effective,
         molar_vol_L=molar_vol,
         mode=mode_key,
         stoich_ratio=stoich_ratio,
@@ -338,12 +350,9 @@ with main_tabs[1]:
     st.header("Calc: Size Active Area from CO₂ Inlet & Stoich")
     st.caption("Give **CO₂ inlet (SLPM)**, **Stoich S**, **current density**, and FE. The tool computes the required **active area** to process that feed.")
 
-    with st.sidebar:
-        st.subheader("Sizing Settings")
-        mv_label_s = st.selectbox("Gas molar volume basis (sizing)", list(MV_OPTIONS.keys()), index=0, key="mv_sizing")
-        molar_vol_s = MV_OPTIONS[mv_label_s]
-        use_stack_s = st.checkbox("Use a stack?", value=True, key="stack_sizing")
-        n_units_s = st.number_input("# Units (for per-unit area)", min_value=1, value=10, step=1, key="units_sizing")
+    # Use global settings
+    molar_vol_s = molar_vol_global
+    units_used = n_units_global if use_stack_global else 1
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -373,7 +382,6 @@ with main_tabs[1]:
         I_total_sz = co2_min_mol_s_sz * F / denom  # A
         A_total_m2 = I_total_sz / max(1e-12, j_A_m2_sz)  # m²
         A_total_cm2 = A_total_m2 * 1e4
-        units_used = n_units_s if use_stack_s else 1
         A_per_unit_m2 = A_total_m2 / units_used
         A_per_unit_cm2 = A_per_unit_m2 * 1e4
 
@@ -413,13 +421,13 @@ with main_tabs[1]:
             st.metric("CO₂ Minimum (SLPM)", f"{co2_min_slpm_sz:.3f}")
             st.metric("Utilization (%)", f"{util_sz*100:.1f}")
 
-        st.caption("Per-unit metrics assume equal area per unit. If you uncheck 'Use a stack', results are for a single unit.")
+        st.caption("Per-unit metrics assume equal area per unit. Uncheck 'Use a stack' in Global Settings for single-unit sizing.")
 
         st.subheader("Resulting Product Rates (for sized area)")
         st.write(f"- CO: **{CO_slpm_sz:.3f} SLPM**")
         st.write(f"- C₂H₄: **{C2H4_slpm_sz:.3f} SLPM**")
 
-# -------------------- Sensitivity: CO2 Utilization --------------------
+# -------------------- Sensitivity: CO₂ Utilization --------------------
 with main_tabs[2]:
     st.header("Sensitivity: CO₂ Utilization")
     st.caption("Sweep **Utilization (%)** as the independent variable for outlet flows (left). The composition vs **Stoich S** plot (right) is also shown. FE is held constant.")
@@ -433,10 +441,13 @@ with main_tabs[2]:
     with col2:
         fe_co_u = st.number_input("FE to CO (%)", min_value=0.0, max_value=100.0, value=90.0, step=1.0, key="u_feco")
         fe_c2h4_u = st.number_input("FE to C₂H₄ (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="u_fec2h4")
-        units_u = st.number_input("# Units", min_value=1, value=10, step=1, key="u_units")
+        # Use global units for consistency
+        units_u = n_units_global if use_stack_global else 1
+        st.info(f"Using global stack setting: {units_u} unit(s). Adjust in Global Settings.")
     with col3:
-        mv_labelu = st.selectbox("Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="u_mv")
-        molar_vol_u = MV_OPTIONS[mv_labelu]
+        # Use global molar volume
+        molar_vol_u = molar_vol_global
+        st.write(f"**Gas basis:** {molar_vol_u:.3f} L/mol (from Global Settings)")
 
     # Utilization sweep
     Umin = st.number_input("Utilization min (%)", min_value=1.0, value=20.0, step=1.0, key="u_min")
@@ -446,7 +457,8 @@ with main_tabs[2]:
     # Compute baseline core
     inp_u = ElectrolyzerInputs(
         area_value=area_u, area_unit="cm²", j_value=j_u, j_unit="mA/cm²",
-        V_cell=V_u, fe_co_pct=fe_co_u, fe_c2h4_pct=fe_c2h4_u, n_units=units_u, molar_vol_L=molar_vol_u,
+        V_cell=V_u, fe_co_pct=fe_co_u, fe_c2h4_pct=fe_c2h4_u,
+        n_units=units_u, molar_vol_L=molar_vol_u,
         mode="S", stoich_ratio=1.0
     )
     core_u = compute_core_products(inp_u)
@@ -498,8 +510,8 @@ with main_tabs[2]:
 with main_tabs[3]:
     st.header("Sensitivity: Area × Stack")
     st.caption("Sweep active area per unit and # of units. Visualize production, power, and CO₂ needs.")
-    mv_label1 = st.selectbox("Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="mv1")
-    molar_vol1 = MV_OPTIONS[mv_label1]
+    # Use global molar volume
+    molar_vol1 = molar_vol_global
 
     # Baseline operating inputs (hold these fixed during the sweep)
     col1, col2, col3 = st.columns(3)
@@ -568,12 +580,12 @@ with main_tabs[3]:
         mime="text/csv"
     )
 
-# -------------------- Sensitivity: CO2 Supply Cap --------------------
+# -------------------- Sensitivity: CO₂ Supply Cap --------------------
 with main_tabs[4]:
     st.header("Sensitivity: CO₂ Supply Cap")
     st.caption("Impose a maximum CO₂ inlet and evaluate feasibility, utilization, and recommendations.")
-    mv_label2 = st.selectbox("Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="mv2")
-    molar_vol2 = MV_OPTIONS[mv_label2]
+    # Use global molar volume
+    molar_vol2 = molar_vol_global
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -586,7 +598,9 @@ with main_tabs[4]:
         fe_co_pct2 = st.number_input("FE to CO (%)", min_value=0.0, max_value=100.0, value=90.0, step=1.0, key="feco2")
         fe_c2h4_pct2 = st.number_input("FE to C₂H₄ (%)", min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="fec2h42")
     with col3:
-        n_units2 = st.number_input("# Units", min_value=1, value=10, step=1, key="units2")
+        # Use global stack
+        n_units2 = n_units_global if use_stack_global else 1
+        st.info(f"Using global stack setting: {n_units2} unit(s). Adjust in Global Settings.")
         co2_cap = st.number_input("CO₂ supply cap (SLPM)", min_value=0.0, value=50.0, step=1.0, key="cap2")
 
     # Compute baseline needs
@@ -638,5 +652,5 @@ with main_tabs[5]:
 - **CO₂ → CO (2 e⁻ per CO):**  
   (alkaline): **CO₂ + H₂O + 2 e⁻ → CO + 2 OH⁻**
 - **CO₂ → C₂H₄ (12 e⁻ per C₂H₄):**  
-  (alkaline): **2 CO₂ + 8H₂O + 12 e⁻  → C₂H₄ + 12OH⁻**
+  (alkaline): **2 CO₂ + 8 H₂O + 12 e⁻ → C₂H₄ + 12 OH⁻**
 """)
