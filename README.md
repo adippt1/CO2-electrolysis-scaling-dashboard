@@ -6,7 +6,7 @@
 [![Python](https://img.shields.io/badge/Python-3.9–3.12-blue.svg)](https://www.python.org/)
 
 
-CHEESE is an interactive Streamlit dashboard (or Cheeseboard) for CO₂ handling and electrolysis scaling. It provides calculators and several sensitivity analyses to translate lab‑scale performance to stack‑level requirements: gas handling, stoichiometry/utilization, active area sizing, and power. It is simple..but it's got heart.
+[CHEESE](https://co2-electrolysis-scaling-dashboard-5kernyncggyov5w4aeoxma.streamlit.app) is an interactive Streamlit dashboard (or Cheeseboard) for CO₂ handling and electrolysis scaling. It provides calculators and several sensitivity analyses to translate lab‑scale performance to stack‑level requirements: gas handling, stoichiometry/utilization, active area sizing, and power. It is simple..but it's got heart.
 
 **Made by:** [Aditya Prajapati (Adi)](https://people.llnl.gov/prajapati3) + ChatGPT (GPT‑5 Thinking): LLM was really helpful in making the codes looks pretty and modular. Also, it takes care of subscripting the molecular formulas which is nice.
 
