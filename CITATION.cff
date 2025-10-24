@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below.
+title: CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator
+authors:
+- family-names: Prajapati
+given-names: Aditya
+affiliation: Lawrence Livermore National Laboratory
+orcid: ""
+version: "1.0.0"
+date-released: 2025-10-23
+repository-code: https://github.com/adippt1/CO2-electrolysis-scaling-dashboard
+abstract: >-
+CHEESE is an interactive Streamlit dashboard that helps size and analyze
+CO₂ electrolysis systems from lab to stack scale, including stoichiometry,
+utilization, and gas handling considerations.
