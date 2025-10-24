@@ -1,8 +1,8 @@
-# cheese_app.py
+
 # CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
 # Author: Aditya Prajapati +ChatGPT (GPT-5 Thinking)
-# Run with: streamlit run cheese_app.py
+
 
 from dataclasses import dataclass
 from typing import Dict, Optional
@@ -17,7 +17,16 @@ st.set_page_config(
     page_icon="🧀",
     layout="wide"
 )
-
+# --- Author credit in sidebar ---
+with st.sidebar:
+    st.markdown(
+        """
+        ---
+        **Created by [Aditya Prajapati](https://people.llnl.gov/prajapati3)**  
+        | LLNL
+        """,
+        unsafe_allow_html=True
+    )
 # -------------------- Constants --------------------
 F = 96485.33212  # C/mol e-
 # Molar volume options (L/mol)
@@ -624,7 +633,7 @@ with main_tabs[5]:
     st.subheader("Reference overall reactions (showing e⁻ counts)")
     st.markdown(r"""
 - **CO₂ → CO (2 e⁻ per CO):**  
-  In aqueous notation (alkaline): **CO₂ + H₂O + 2 e⁻ → CO + 2 OH⁻**
+  (alkaline): **CO₂ + H₂O + 2 e⁻ → CO + 2 OH⁻**
 - **CO₂ → C₂H₄ (12 e⁻ per C₂H₄):**  
-  One overall representation (acidic): **2 CO₂ + 12 e⁻ + 8 H⁺ → C₂H₄ + 4 H₂O**
+  (alkaline): **2 CO₂ + 8H₂O + 12 e⁻  → C₂H₄ + 12OH⁻**
 """)
