@@ -301,6 +301,47 @@ tab_instructions, tab_calc, tab_size, tab_s2, tab_s3 = st.tabs([
 
 # -------------------- Tab: Instructions --------------------
 with tab_instructions:
+    with st.expander("How to Use the CHEESEboard", expanded=False):
+    st.markdown("""
+    ###  Quick Guide
+
+    **Purpose:**  
+    This dashboard helps estimate CO₂ electrolyzer scaling parameters, product outputs, and sensitivities.
+
+    **Tabs Overview:**
+    - **Calculator:**  
+      Input area, current density, cell voltage, and Faradaic efficiencies (FEs).  
+      Choose between `Stoich (S)` or `Inlet Flow` modes to compute:
+        - Gas and liquid product rates  
+        - CO₂ utilization (%)  
+        - Power and total current
+     
+    
+    - **Calc: Area from Inlet & Stoich:**  
+      Provides the **required electrode area** per unit and total area for a given CO₂ inlet and stoichiometric ratio (S).  
+      Includes per-product outputs (gas SLPM, liquid kg/h, etc.).
+
+    - **Sensitivity: CO₂ Utilization:**  
+      Sweeps utilization (%) to show gas outlet composition and flowrate trends.
+
+    - **Sensitivity: Area × Stack:**  
+      Visualizes scaling trade-offs between cell area and number of units in the stack using a heatmap.
+
+    - **Sensitivity: CO₂ Supply Cap:**  
+      Determines the maximum achievable utilization given a CO₂ feed limitation.
+
+    - **Constants & Reference (this tab):**  
+      Lists all physical constants, product properties, and data sources.
+
+    **Tips:**  
+    - You can download any result table via the “Download CSV” buttons.  
+    - Hover over plots for tooltips showing precise data points.  
+    - Adjust **molar volume basis (STP/SATP)** in the sidebar to update gas volumetric conversions.
+    - If you find any mistakes please feel free to reach out!
+
+    ---
+    """)
+
     st.subheader("Constants & Properties")
     st.markdown(f"""
 - **Faraday constant (F):** `{F:.5f}` C·mol⁻¹ e⁻  
