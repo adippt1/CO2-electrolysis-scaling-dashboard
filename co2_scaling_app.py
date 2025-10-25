@@ -4,33 +4,33 @@
 # Copyright (c) 2025 Aditya Prajapati
 
 from dataclasses import dataclass
-from typing import Dict, Optional, List
-
+from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import altair as alt
 import streamlit as st
 
-# -------------------- Page & Sidebar --------------------
+# -------------------- Page setup --------------------
 st.set_page_config(
-    page_title="CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator",
+    page_title="CHEESE — CO₂ Handling & Electrolysis",
     page_icon="🧀",
-    layout="wide"
+    layout="wide",
 )
 
-st.markdown("""
+st.title("🧀 CHEESE — CO₂ Handling & Electrolysis Scaling Evaluator")
+st.caption("Because scaling electrolysis shouldn’t be this gouda!")
+
+st.markdown(
+    """
 <style>
-/* Tight, consistent inputs */
 .block-container {max-width: 1250px;}
 div[data-testid="stMetric"] {text-align:center;}
 div[data-testid="stMetric"] > label {justify-content:center;}
-/* Make number inputs more compact and consistent width */
-section[data-testid="stSidebar"] .stNumberInput > div > div { width: 100%; }
-.stNumberInput label p, .stSelectbox label p { font-weight: 600; }
 .fe-grid .stNumberInput > div > div { min-width: 160px; }
 </style>
-""", unsafe_allow_html=True)
-
+""",
+    unsafe_allow_html=True,
+)
 with st.sidebar:
     st.markdown(
         """
@@ -43,36 +43,94 @@ with st.sidebar:
     )
 
 # -------------------- Constants --------------------
-EPS = 1e-12
 F = 96485.33212  # C/mol e-
+SECONDS_PER_MIN = 60.0
+EPS = 1e-12
+
+# Molar volume options (L/mol)
 MV_OPTIONS = {
     "STP (0°C, 1 atm) — 22.414 L/mol": 22.414,
     "SATP (25°C, 1 atm) — 24.465 L/mol": 24.465,
 }
 
-# Product registry: electrons per mol, CO2 stoich per mol product, and E0 for EE display
-DEFAULT_PRODUCTS = {
-    "CO":      {"n_e": 2,  "co2_per_mol": 1.0, "E0": 1.33},
-    "C2H4":    {"n_e": 12, "co2_per_mol": 2.0, "E0": 1.17},
-    "CH3OH":   {"n_e": 6,  "co2_per_mol": 1.0, "E0": 0.02},
-    "C2H5OH":  {"n_e": 12, "co2_per_mol": 2.0, "E0": 0.08},
-    "MGO (Methylglyoxal)":     {"n_e": 12, "co2_per_mol": 3.0, "E0": 0.10},  # methylglyoxal (C3)
-    "HCOO- (Formate)":    {"n_e": 2,  "co2_per_mol": 1.0, "E0": 0.20},  # formate
-}
-if "PRODUCTS" not in st.session_state:
-    st.session_state.PRODUCTS = DEFAULT_PRODUCTS.copy()
-PRODUCTS = st.session_state.PRODUCTS
-PRODUCT_LIST: List[str] = list(PRODUCTS.keys())
+# -------------------- Sidebar controls (global) --------------------
+st.sidebar.header("Global Settings")
 
-# -------------------- Helpers --------------------
+basis_label = st.sidebar.selectbox(
+    "Gas molar volume basis",
+    options=list(MV_OPTIONS.keys()),
+    index=0,
+    key="global_basis",
+    help="Used to compute gas molar flows from SLPM and gas densities from MW.",
+)
+
+mv_L_per_mol = MV_OPTIONS[basis_label]  # L/mol
+mv_m3_per_mol = mv_L_per_mol / 1000.0  # m³/mol
+
+use_stack_global = st.sidebar.checkbox("Use a stack (multiple identical units)?", value=True, key="gs_stack")
+n_units_global = st.sidebar.number_input("Number of units in stack", min_value=1, value=10, step=1, key="gs_units")
+
+# -------------------- Helper: numeric sanitizer (Arrow-safe) --------------------
+NUMERIC_COLS = {
+    "MW (g/mol)",
+    "nₑ⁻ to product",
+    "LHV (MJ/kg)",
+    "HHV (MJ/kg)",
+    "ρ_liq (kg/L)",
+    "E0 (V) [display]",
+}
+
+CLEAN_NULLS = {
+    r"^\s*$": np.nan,
+    "—": np.nan,
+    "–": np.nan,
+    "NA": np.nan,
+    "N/A": np.nan,
+    "n/a": np.nan,
+}
+
+def sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    for c in df.columns:
+        if c in NUMERIC_COLS:
+            series = out[c]
+            if series.dtype == "O":
+                series = (
+                    series.replace(CLEAN_NULLS, regex=True)
+                    .astype(str)
+                    .str.replace(r"[^\d\.\-eE+]", "", regex=True)
+                )
+            out[c] = pd.to_numeric(series, errors="coerce").astype(float)
+    return out
+
+# -------------------- Product properties (single source of truth) --------------------
+# Keep only one of (Formate, Formic acid) -> keep Formic acid.
+# Add MGO. Include optional E0 (display-only) where available.
+PRODUCTS: List[Dict] = [
+    # Gases
+    {"Product": "CO",         "Phase": "gas",    "MW (g/mol)": 28.010, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 10.1,  "HHV (MJ/kg)": 12.6, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.33},
+    {"Product": "H₂",         "Phase": "gas",    "MW (g/mol)": 2.016,  "nₑ⁻ to product": 2,  "co2_per_mol": 0.0, "LHV (MJ/kg)": 120.0, "HHV (MJ/kg)": 141.9,"ρ_liq (kg/L)": np.nan, "E0 (V) [display]": np.nan},
+    {"Product": "CH₄",        "Phase": "gas",    "MW (g/mol)": 16.043, "nₑ⁻ to product": 8,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 50.0,  "HHV (MJ/kg)": 55.5, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": np.nan},
+    {"Product": "C₂H₄",       "Phase": "gas",    "MW (g/mol)": 28.054, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 47.2,  "HHV (MJ/kg)": 51.9, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.17},
+    # Liquids (at ~25 °C)
+    {"Product": "Methanol",   "Phase": "liquid", "MW (g/mol)": 32.042, "nₑ⁻ to product": 6,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 19.9,  "HHV (MJ/kg)": 22.7, "ρ_liq (kg/L)": 0.791, "E0 (V) [display]": 0.02},
+    {"Product": "Ethanol",    "Phase": "liquid", "MW (g/mol)": 46.069, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 26.8,  "HHV (MJ/kg)": 29.7, "ρ_liq (kg/L)": 0.789, "E0 (V) [display]": 0.08},
+    {"Product": "Formic acid","Phase": "liquid", "MW (g/mol)": 46.026, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 5.9,   "HHV (MJ/kg)": 6.3,  "ρ_liq (kg/L)": 1.220, "E0 (V) [display]": 0.20},
+    {"Product": "MGO",        "Phase": "liquid", "MW (g/mol)": 72.060, "nₑ⁻ to product": 12, "co2_per_mol": 3.0, "LHV (MJ/kg)": np.nan,"HHV (MJ/kg)": np.nan,"ρ_liq (kg/L)": 1.050, "E0 (V) [display]": 0.10},
+]
+
+PRODUCT_LIST = [p["Product"] for p in PRODUCTS]
+GASES = [p["Product"] for p in PRODUCTS if p["Phase"].lower() == "gas"]
+LIQUIDS = [p["Product"] for p in PRODUCTS if p["Phase"].lower() == "liquid"]
+PRODUCT_MAP = {p["Product"]: p for p in PRODUCTS}
+
+# -------------------- Utility helpers --------------------
 def to_m2(area_value: float, area_unit: str) -> float:
     return area_value * 1e-4 if area_unit == "cm²" else area_value
 
 def to_A_per_m2(j_value: float, j_unit: str) -> float:
-    if j_unit == "mA/cm²":
-        return j_value * 10.0
-    if j_unit == "A/cm²":
-        return j_value * 1e4
+    if j_unit == "mA/cm²": return j_value * 10.0
+    if j_unit == "A/cm²":  return j_value * 1e4
     return j_value
 
 def fe_to_frac(fe_pct: float) -> float:
@@ -90,6 +148,13 @@ def mol_s_to_slpm(n_dot: float, molar_volume_L: float) -> float:
 def slpm_to_mol_s(flow_slpm: float, molar_volume_L: float) -> float:
     return flow_slpm / (molar_volume_L * 60.0 if molar_volume_L > 0 else np.inf)
 
+def mflow_to_mass_and_vol(n_mol_s: float, MW_g_mol: float, rho_liq_kg_L: Optional[float]) -> Tuple[float, Optional[float]]:
+    kg_h = n_mol_s * MW_g_mol * 3600.0 / 1000.0
+    if rho_liq_kg_L is None or rho_liq_kg_L <= 0:
+        return kg_h, None
+    L_h = kg_h / rho_liq_kg_L
+    return kg_h, L_h
+
 def total_power_watts(I: float, V: float, n_units: int) -> float:
     return I * V * max(1, n_units)
 
@@ -101,75 +166,28 @@ def fe_grid_inputs(
     title: str = "Faradaic Efficiencies (%, sum ≤ 100)",
     per_row: int = 3
 ) -> Dict[str, float]:
-    """Render a neatly aligned grid of FE (%) number_inputs, returning {product: value}."""
     st.markdown(f"#### {title}")
     fe_map: Dict[str, float] = {}
-    # fallback defaults: CO=90, others 0
     defaults = {p: (90.0 if p == "CO" else 0.0) for p in products}
     if default_map:
         defaults.update({k: float(default_map.get(k, defaults[k])) for k in products})
-
-    # rows of 'per_row' products
     for i in range(0, len(products), per_row):
         row = products[i:i+per_row]
         cols = st.columns(len(row), gap="small")
-        with st.container():
-            st.markdown('<div class="fe-grid">', unsafe_allow_html=True)
-            for c, p in enumerate(row):
-                with cols[c]:
-                    fe_map[p] = st.number_input(
-                        f"{p} FE (%)",
-                        min_value=0.0, max_value=100.0,
-                        value=defaults[p],
-                        step=1.0,
-                        key=f"{section_key}_fe_{p}"
-                    )
-            st.markdown("</div>", unsafe_allow_html=True)
-    return fe_map
-
-def fe_mean_stdev_grid(
-    section_key: str,
-    products: List[str],
-    mean_defaults: Optional[Dict[str, float]] = None,
-    stdev_defaults: Optional[Dict[str, float]] = None,
-    title: str = "FE means & stdevs",
-    per_row: int = 3
-):
-    """Aligned grid for Monte Carlo: per product column: mean (%) then stdev (%)."""
-    st.subheader(title)
-    mean_def = {p: (90.0 if p == "CO" else 0.0) for p in products}
-    if mean_defaults:
-        mean_def.update({k: float(mean_defaults.get(k, mean_def[k])) for k in products})
-    sd_def = {p: (2.0 if p == "CO" else 1.0) for p in products}
-    if stdev_defaults:
-        sd_def.update({k: float(stdev_defaults.get(k, sd_def[k])) for k in products})
-
-    fe_mean: Dict[str, float] = {}
-    fe_sd: Dict[str, float] = {}
-
-    for i in range(0, len(products), per_row):
-        row = products[i:i+per_row]
-        cols = st.columns(len(row), gap="small")
+        st.markdown('<div class="fe-grid">', unsafe_allow_html=True)
         for c, p in enumerate(row):
             with cols[c]:
-                st.markdown(f"**{p}**")
-                fe_mean[p] = st.number_input(
-                    "mean (%)",
+                fe_map[p] = st.number_input(
+                    f"{p} FE (%)",
                     min_value=0.0, max_value=100.0,
-                    value=mean_def[p],
+                    value=defaults[p],
                     step=1.0,
-                    key=f"{section_key}_mean_{p}"
+                    key=f"{section_key}_fe_{p}"
                 )
-                fe_sd[p] = st.number_input(
-                    "stdev (%)",
-                    min_value=0.0, max_value=100.0,
-                    value=sd_def[p],
-                    step=0.5,
-                    key=f"{section_key}_sd_{p}"
-                )
-    return fe_mean, fe_sd
+        st.markdown("</div>", unsafe_allow_html=True)
+    return fe_map
 
-# -------------------- Data class --------------------
+# -------------------- Core calculators (multi-product, gas vs liquid) --------------------
 @dataclass
 class ElectrolyzerInputs:
     area_value: float
@@ -177,80 +195,48 @@ class ElectrolyzerInputs:
     j_value: float
     j_unit: str
     V_cell: float
-    fe_map_pct: Dict[str, float]  # FE% per product key
+    fe_map_pct: Dict[str, float]
     n_units: int
     molar_vol_L: float
-    mode: str  # "S" or "INLET"
-    stoich_ratio: Optional[float] = None
-    co2_in_slpm_input: Optional[float] = None
 
-# -------------------- Core calculators (multi-product) --------------------
 def compute_core_products(inp: ElectrolyzerInputs) -> Dict[str, float]:
     A_m2 = to_m2(inp.area_value, inp.area_unit)
     j_A_m2 = to_A_per_m2(inp.j_value, inp.j_unit)
     I_unit = amps(A_m2, j_A_m2)
     I_total = I_unit * max(1, inp.n_units)
-    P_total_W = total_power_watts(I_unit, inp.V_cell, inp.n_units)
 
     co2_min_mol_s = 0.0
-    EE_total = 0.0
-    out = {}
+    out: Dict[str, float] = {}
+    gas_total_slpm = 0.0
 
-    for p in PRODUCTS:
+    for p in PRODUCT_LIST:
         fe_frac = fe_to_frac(inp.fe_map_pct.get(p, 0.0))
-        n_e = PRODUCTS[p]["n_e"]
-        co2_per = PRODUCTS[p]["co2_per_mol"]
-        E0 = PRODUCTS[p]["E0"]
+        n_e = PRODUCT_MAP[p]["nₑ⁻ to product"]
+        co2_per = PRODUCT_MAP[p]["co2_per_mol"]
+        phase = PRODUCT_MAP[p]["Phase"].lower()
 
-        n_p = prod_mol_s(I_total, fe_frac, n_e)
+        n_p = prod_mol_s(I_total, fe_frac, n_e)  # mol/s
         out[f"{p}_mol_s"] = n_p
-        out[f"{p}_slpm"] = mol_s_to_slpm(n_p, inp.molar_vol_L)
-        co2_min_mol_s += n_p * co2_per
-        EE_total += (E0 / max(inp.V_cell, EPS)) * fe_frac
 
+        if phase == "gas":
+            slpm = mol_s_to_slpm(n_p, inp.molar_vol_L)
+            out[f"{p}_slpm"] = slpm
+            gas_total_slpm += slpm
+        else:
+            out[f"{p}_slpm"] = 0.0
+
+        co2_min_mol_s += n_p * co2_per
+
+    out["Gas_products_total_SLPM"] = gas_total_slpm
     out["CO2_min_slpm"] = mol_s_to_slpm(co2_min_mol_s, inp.molar_vol_L)
     out["I_unit_A"] = I_unit
     out["I_total_A"] = I_total
-    out["P_total_W"] = P_total_W
-    out["EE_total"] = EE_total
     return out
-
-def apply_feed_mode(core: Dict[str, float], inp: ElectrolyzerInputs) -> Dict[str, float]:
-    co2_min_slpm = max(core["CO2_min_slpm"], 0.0)
-
-    if co2_min_slpm <= EPS:
-        if inp.mode == "S":
-            S = max(1.0, float(inp.stoich_ratio or 1.0))
-            co2_in_slpm = 0.0
-            util = 1.0
-            warn = "Total FE to carbon products is zero; CO₂ minimum is 0. Adjust FE split."
-        else:
-            co2_in_slpm = max(0.0, float(inp.co2_in_slpm_input or 0.0))
-            S = np.inf if co2_in_slpm > 0 else 1.0
-            util = 0.0 if co2_in_slpm > 0 else 1.0
-            warn = "Total FE to carbon products is zero; CO₂ minimum is 0. Inlet has no effect."
-        return {"CO2_in_slpm": co2_in_slpm, "Stoich_S": S, "CO2_utilization": util, "warning": warn}
-
-    if inp.mode == "S":
-        S = max(1.0, float(inp.stoich_ratio or 1.0))
-        co2_in_slpm = S * co2_min_slpm
-        util = 1.0 / S
-        warn = None
-    else:
-        co2_in_slpm = max(0.0, float(inp.co2_in_slpm_input or 0.0))
-        S = co2_in_slpm / max(co2_min_slpm, EPS)
-        if co2_in_slpm < co2_min_slpm:
-            util = min(1.0, 1.0 / max(S, EPS))
-            warn = f"Provided CO₂ inlet ({co2_in_slpm:.3f} SLPM) is below the theoretical minimum ({co2_min_slpm:.3f} SLPM)."
-        else:
-            util = 1.0 / max(S, EPS)
-            warn = None
-    return {"CO2_in_slpm": co2_in_slpm, "Stoich_S": S, "CO2_utilization": min(1.0, util), "warning": warn}
 
 def build_sensitivity_table_S(core: Dict[str, float], S_min: float, S_max: float, S_step: float) -> pd.DataFrame:
     co2_min_slpm = core["CO2_min_slpm"]
-    prod_slpm_map = {p: core[f"{p}_slpm"] for p in PRODUCTS}
-    total_prod_slpm = sum(prod_slpm_map.values())
+    gas_prod_slpm = {p: core.get(f"{p}_slpm", 0.0) for p in GASES}
+    gas_prod_total = sum(gas_prod_slpm.values())
 
     S_vals = np.arange(S_min, S_max + 1e-9, S_step)
     rows = []
@@ -259,26 +245,26 @@ def build_sensitivity_table_S(core: Dict[str, float], S_min: float, S_max: float
         util = 1.0 / S
         co2_in = S * co2_min_slpm
         co2_out = co2_in - co2_min_slpm
-        total_out = max(1e-12, co2_out + total_prod_slpm)
+        gas_total_out = max(1e-9, co2_out + gas_prod_total)
 
         row = {
             "Stoich S (inlet/min)": S,
             "CO2 Utilization (frac)": util,
             "CO2 Inlet (SLPM)": co2_in,
             "CO2 Outlet (SLPM)": co2_out,
-            "Total Outlet (SLPM)": total_out,
-            "CO2 vol%": 100 * co2_out / total_out,
+            "Gas Total Outlet (SLPM)": gas_total_out,
+            "CO2 vol%": 100 * co2_out / gas_total_out,
         }
-        for p in PRODUCTS:
-            row[f"{p} (SLPM)"] = prod_slpm_map[p]
-            row[f"{p} vol%"] = 100 * prod_slpm_map[p] / total_out
+        for p in GASES:
+            row[f"{p} (SLPM)"] = gas_prod_slpm[p]
+            row[f"{p} vol%"] = 100 * gas_prod_slpm[p] / gas_total_out
         rows.append(row)
     return pd.DataFrame(rows)
 
 def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct: float, Ustep_pct: float) -> pd.DataFrame:
     co2_min_slpm = core["CO2_min_slpm"]
-    prod_slpm_map = {p: core[f"{p}_slpm"] for p in PRODUCTS}
-    total_prod_slpm = sum(prod_slpm_map.values())
+    gas_prod_slpm = {p: core.get(f"{p}_slpm", 0.0) for p in GASES}
+    gas_prod_total = sum(gas_prod_slpm.values())
 
     U_vals_pct = np.arange(Umin_pct, Umax_pct + 1e-9, Ustep_pct)
     rows = []
@@ -287,117 +273,203 @@ def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct:
         S = 1.0 / U
         co2_in = S * co2_min_slpm
         co2_out = co2_in - co2_min_slpm
-        total_out = max(1e-12, co2_out + total_prod_slpm)
+        gas_total_out = max(1e-9, co2_out + gas_prod_total)
 
         row = {
             "Utilization (%)": U_pct,
             "Stoich S (inlet/min)": S,
             "CO2 Inlet (SLPM)": co2_in,
             "CO2 Outlet (SLPM)": co2_out,
-            "Total Outlet (SLPM)": total_out,
-            "CO2 vol%": 100 * co2_out / total_out,
+            "Gas Total Outlet (SLPM)": gas_total_out,
+            "CO2 vol%": 100 * co2_out / gas_total_out,
         }
-        for p in PRODUCTS:
-            row[f"{p} (SLPM)"] = prod_slpm_map[p]
-            row[f"{p} vol%"] = 100 * prod_slpm_map[p] / total_out
+        for p in GASES:
+            row[f"{p} (SLPM)"] = gas_prod_slpm[p]
+            row[f"{p} vol%"] = 100 * gas_prod_slpm[p] / gas_total_out
         rows.append(row)
     return pd.DataFrame(rows)
 
-# -------------------- Global Settings --------------------
-st.sidebar.header("Global Settings")
-mv_label_global = st.sidebar.selectbox("Gas molar volume basis", list(MV_OPTIONS.keys()), index=0, key="gs_mv")
-molar_vol_global = MV_OPTIONS[mv_label_global]
-
-use_stack_global = st.sidebar.checkbox("Use a stack (multiple identical units)?", value=True, key="gs_stack")
-n_units_global = st.sidebar.number_input("Number of units in stack", min_value=1, value=10, step=1, key="gs_units")
-st.sidebar.markdown("---")
-
-# -------------------- UI --------------------
-st.title("🧀 CHEESE: CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
-st.markdown(
-    '<div style="font-size:1.05rem; font-weight:600; color:#6b7280; margin-top:-6px;">'
-    'Because scaling electrolysis shouldn’t be this gouda! 🧀'
-    '</div>',
-    unsafe_allow_html=True,
-)
-st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO (Methylglyoxal), HCOO- (Formate) | Calculators + sensitivities + Monte Carlo")
-
-main_tabs = st.tabs([
-    "Calculator",
-    "Calc: Size Active Area from CO₂ Inlet & Stoich",
-    "Sensitivity: CO₂ Utilization",
-    "Sensitivity: Area × Stack",
-    "Sensitivity: CO₂ Supply Cap",
-    "Monte Carlo",
+# -------------------- Tabs (Overview removed; Constants first) --------------------
+tab_constants, tab_calc, tab_size, tab_s1, tab_s2, tab_s3 = st.tabs([
     "Constants",
+    "Calculator",
+    "Calc: Area from Inlet & Stoich",
+    "Sensitivity (Single-Param)",
+    "Sensitivity: CO₂ Utilization",
+    "Sensitivity: Area × Stack / CO₂ Cap",
 ])
 
-# -------------------- Calculator --------------------
-with main_tabs[0]:
-    st.header("Calculator")
+# -------------------- Tab: Constants --------------------
+with tab_constants:
+    st.subheader("Constants & Properties")
+    st.markdown(f"""
+- **Faraday constant (F):** `{F:.5f}` C·mol⁻¹ e⁻  
+- **Molar volume bases:**  
+  • STP = `{MV_OPTIONS['STP (0°C, 1 atm) — 22.414 L/mol']:.3f}` L·mol⁻¹  
+  • SATP = `{MV_OPTIONS['SATP (25°C, 1 atm) — 24.465 L/mol']:.3f}` L·mol⁻¹  
+- **Current basis:** `{basis_label}`  
+- **Stacking:** `{'ON' if use_stack_global else 'OFF'}` — Units: `{n_units_global}`  
+- **Gas products:** {", ".join(GASES) if GASES else "None"}  
+- **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
+""")
+
+    # Controls to display densities
+    c1, c2 = st.columns(2)
+    with c1:
+        gas_density_unit = st.selectbox(
+            "Gas density display unit",
+            options=["kg/m³", "g/L"],
+            index=0,
+            key="gas_density_unit",
+        )
+    with c2:
+        liq_density_unit = st.selectbox(
+            "Liquid density display unit",
+            options=["kg/L", "g/mL"],
+            index=0,
+            key="liq_density_unit",
+        )
+
+    # Build displayed table
+    raw_df = pd.DataFrame.from_records(PRODUCTS)
+    products_df = sanitize_numeric_columns(raw_df)
+
+    mw_kg_per_mol = products_df["MW (g/mol)"] / 1000.0
+    rho_gas_si = (mw_kg_per_mol / mv_m3_per_mol).where(products_df["Phase"].str.lower().eq("gas"), np.nan)
+    def fmt_gas(kg_per_m3: pd.Series, unit: str) -> pd.Series:
+        return kg_per_m3  # 1 kg/m³ = 1 g/L
+    def fmt_liq(kg_per_L: pd.Series, unit: str) -> pd.Series:
+        return kg_per_L   # 1 kg/L = 1 g/mL
+
+    display_df = products_df[[
+        "Product","Phase","MW (g/mol)","nₑ⁻ to product","co2_per_mol","LHV (MJ/kg)","HHV (MJ/kg)","E0 (V) [display]"
+    ]].copy()
+    display_df[f"ρ (gas @ {basis_label.split('—')[0].strip()}) [{gas_density_unit}]"] = fmt_gas(rho_gas_si, gas_density_unit)
+    display_df[f"ρ (liquid) [{liq_density_unit}]"] = fmt_liq(products_df["ρ_liq (kg/L)"], liq_density_unit)
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        column_config={
+            "MW (g/mol)": st.column_config.NumberColumn("MW (g/mol)", format="%.3f"),
+            "nₑ⁻ to product": st.column_config.NumberColumn("nₑ⁻ to product", format="%d"),
+            "co2_per_mol": st.column_config.NumberColumn("CO₂ per mol product", format="%.2f"),
+            "LHV (MJ/kg)": st.column_config.NumberColumn("LHV (MJ/kg)", format="%.2f"),
+            "HHV (MJ/kg)": st.column_config.NumberColumn("HHV (MJ/kg)", format="%.2f"),
+            "E0 (V) [display]": st.column_config.NumberColumn("E⁰ (V) [display only]", format="%.2f"),
+        },
+    )
+
+    csv = display_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="⬇️ Download constants table (CSV)",
+        data=csv,
+        file_name="cheese_constants.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="download_constants_csv",
+    )
+
+# -------------------- Tab: Calculator (Area/j with S or Inlet) --------------------
+with tab_calc:
+    st.subheader("Calculator: Provide Area, j, FE; choose Stoich S or Inlet")
+    st.caption("Multi-product, true gas vs liquid handling. Shows per-product outputs.")
+
     colA, colB, colC = st.columns(3)
     with colA:
         area_value = st.number_input("Active area per unit", min_value=0.0, value=100.0, step=1.0, key="calc_area")
-        area_unit = st.selectbox("Area unit", ["cm²", "m²"], index=0, key="calc_area_unit")
+        area_unit  = st.selectbox("Area unit", ["cm²", "m²"], index=0, key="calc_area_unit")
     with colB:
         j_value = st.number_input("Current density", min_value=0.0, value=200.0, step=10.0, key="calc_j")
-        j_unit = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="calc_j_unit")
+        j_unit  = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="calc_j_unit")
     with colC:
-        V_cell = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="calc_V")
+        V_cell  = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="calc_V")
 
-    fe_map_pct = fe_grid_inputs("calc", PRODUCT_LIST)
+    fe_map_pct: Dict[str, float] = fe_grid_inputs("calc", PRODUCT_LIST, title="FE split (%)")
 
     st.divider()
     mode = st.radio("CO₂ feed input mode", ["Stoich (S)", "Inlet flow (SLPM)"], index=0, horizontal=True, key="calc_mode")
     if mode == "Stoich (S)":
-        stoich_ratio = st.number_input("CO₂ Stoich S (inlet/min)", min_value=1.0, value=2.0, step=0.1, key="calc_S")
+        S = st.number_input("CO₂ Stoich S (inlet/min)", min_value=1.0, value=2.0, step=0.1, key="calc_S")
         co2_in_slpm_input = None
-        mode_key = "S"
     else:
         co2_in_slpm_input = st.number_input("CO₂ Inlet flow (SLPM)", min_value=0.0, value=10.0, step=0.5, key="calc_inlet")
-        stoich_ratio = None
-        mode_key = "INLET"
+        S = None
 
     n_units_effective = n_units_global if use_stack_global else 1
     inp = ElectrolyzerInputs(
         area_value=area_value, area_unit=area_unit,
         j_value=j_value, j_unit=j_unit,
         V_cell=V_cell, fe_map_pct=fe_map_pct,
-        n_units=n_units_effective, molar_vol_L=molar_vol_global,
-        mode=mode_key, stoich_ratio=stoich_ratio,
-        co2_in_slpm_input=co2_in_slpm_input,
+        n_units=n_units_effective, molar_vol_L=mv_L_per_mol,
     )
     core = compute_core_products(inp)
-    feed = apply_feed_mode(core, inp)
 
-    st.subheader("Results")
-    m1, m2, m3, m4 = st.columns(4)
-    with m1: st.metric("Per-Unit Current (A)", f"{core['I_unit_A']:.2f}")
-    with m2: st.metric("Total Current (A)", f"{core['I_total_A']:.2f}")
-    with m3: st.metric("Total Power (kW)", f"{core['P_total_W']/1000:.2f}")
-    with m4: st.metric("Energy Efficiency (Σ E₀/E_cell·FE)", f"{core['EE_total']*100:.1f}%")
+    # Determine inlet, S, utilization
+    if core["CO2_min_slpm"] <= EPS:
+        co2_in_slpm = 0.0 if (mode == "Stoich (S)") else float(co2_in_slpm_input or 0.0)
+        Stoich_S = (np.inf if co2_in_slpm > 0 else 1.0) if mode != "Stoich (S)" else float(S or 1.0)
+        util = 0.0 if co2_in_slpm > 0 else 1.0
+        warn = "Total FE to carbon products is zero; CO₂ minimum is 0."
+    else:
+        if mode == "Stoich (S)":
+            Stoich_S = max(1.0, float(S or 1.0))
+            co2_in_slpm = Stoich_S * core["CO2_min_slpm"]
+            util = 1.0 / Stoich_S
+            warn = None
+        else:
+            co2_in_slpm = max(0.0, float(co2_in_slpm_input or 0.0))
+            Stoich_S = co2_in_slpm / max(core["CO2_min_slpm"], EPS)
+            util = min(1.0, 1.0 / max(Stoich_S, EPS))
+            warn = None if co2_in_slpm >= core["CO2_min_slpm"] else f"Inlet ({co2_in_slpm:.3f} SLPM) < minimum ({core['CO2_min_slpm']:.3f} SLPM)."
 
-    m5, m6, m7, m8 = st.columns(4)
-    with m5: st.metric("CO₂ Minimum (SLPM)", f"{core['CO2_min_slpm']:.3f}")
-    with m6: st.metric("CO₂ Inlet (SLPM)", f"{feed['CO2_in_slpm']:.3f}")
-    with m7:
-        Sval = feed['Stoich_S']
-        st.metric("Stoich S (inlet/min)", "∞" if not np.isfinite(Sval) else f"{Sval:.3f}")
-    with m8: st.metric("Utilization (%)", f"{feed['CO2_utilization']*100:.1f}")
-    if feed["warning"]:
-        st.warning(feed["warning"])
+    # GAS metrics
+    st.subheader("Gas-side Results (true outlet)")
+    g1, g2, g3, g4 = st.columns(4)
+    with g1: st.metric("CO₂ Minimum (SLPM)", f"{core['CO2_min_slpm']:.3f}")
+    with g2: st.metric("CO₂ Inlet (SLPM)", f"{co2_in_slpm:.3f}")
+    with g3: st.metric("Stoich S (inlet/min)", "∞" if not np.isfinite(Stoich_S) else f"{Stoich_S:.3f}")
+    with g4: st.metric("Utilization (%)", f"{util*100:.1f}")
 
-    st.divider()
-    st.markdown("#### Product flowrates (SLPM)")
-    flow_cols = st.columns(len(PRODUCT_LIST))
-    for i, p in enumerate(PRODUCT_LIST):
-        with flow_cols[i]:
-            st.metric(p, f"{core[f'{p}_slpm']:.3f}")
+    g5, g6, g7 = st.columns(3)
+    with g5: st.metric("Per-Unit Current (A)", f"{core['I_unit_A']:.2f}")
+    with g6: st.metric("Total Current (A)", f"{core['I_total_A']:.2f}")
+    with g7: st.metric("Power (kW)", f"{(core['I_total_A']*V_cell)/1000.0:.2f}")
 
-# -------------------- Calc: Size Active Area from CO₂ Inlet & Stoich --------------------
-with main_tabs[1]:
-    st.header("Calc: Size Active Area from CO₂ Inlet & Stoich")
-    st.caption("Provide CO₂ inlet (SLPM), Stoich S, current density, and FE split. Computes required active area.")
+    st.markdown("#### Gas product flowrates (SLPM)")
+    gas_cols = st.columns(max(1, len(GASES)))
+    for i, p in enumerate(GASES):
+        with gas_cols[i]:
+            st.metric(p, f"{core.get(f'{p}_slpm', 0.0):.3f}")
+    gas_total_out = sum(core.get(f"{p}_slpm", 0.0) for p in GASES) + max(co2_in_slpm - core["CO2_min_slpm"], 0.0)
+    st.metric("Gas Total Outlet (SLPM)", f"{gas_total_out:.3f}")
+
+    # LIQUID metrics
+    st.subheader("Liquid production (true condensed)")
+    liq_rows = []
+    for p in LIQUIDS:
+        n_p = core.get(f"{p}_mol_s", 0.0)
+        MW = PRODUCT_MAP[p]["MW (g/mol)"]
+        rho = PRODUCT_MAP[p]["ρ_liq (kg/L)"]
+        kg_h, L_h = mflow_to_mass_and_vol(n_p, MW, rho)
+        liq_rows.append({
+            "Product": p,
+            "mol/s": n_p,
+            "kg/h": kg_h,
+            "L/h": (L_h if L_h is not None else 0.0),
+            "ρ (kg/L)": (rho if rho else 0.0),
+            "MW (g/mol)": MW
+        })
+    if liq_rows:
+        df_liq = pd.DataFrame(liq_rows)
+        st.dataframe(df_liq, hide_index=True, use_container_width=True)
+
+    if warn:
+        st.warning(warn)
+
+# -------------------- Tab: Calc — Size Active Area from CO₂ Inlet & Stoich --------------------
+with tab_size:
+    st.subheader("Calc: Size Active Area from CO₂ Inlet & Stoich (with per-product outputs)")
 
     units_used = n_units_global if use_stack_global else 1
     col1, col2, col3 = st.columns(3)
@@ -413,12 +485,12 @@ with main_tabs[1]:
 
     j_A_m2_sz = to_A_per_m2(j_val_sz, j_unit_sz)
     co2_min_slpm_sz = co2_in_slpm_sz / max(S_sz, EPS)
-    co2_min_mol_s_sz = slpm_to_mol_s(co2_min_slpm_sz, molar_vol_global)
+    co2_min_mol_s_sz = slpm_to_mol_s(co2_min_slpm_sz, mv_L_per_mol)
 
-    denom = 0.0
+    denom = 0.0  # Σ FE_i * (CO2_per_i / n_e_i)
     for p in PRODUCT_LIST:
         fe_frac = fe_to_frac(fe_map_sz.get(p, 0.0))
-        denom += fe_frac * PRODUCTS[p]["co2_per_mol"] / max(PRODUCTS[p]["n_e"], EPS)
+        denom += fe_frac * PRODUCT_MAP[p]["co2_per_mol"] / max(PRODUCT_MAP[p]["nₑ⁻ to product"], EPS)
 
     if denom <= EPS:
         st.error("FE split yields zero carbon products (Σ FE_i·CO₂_per_i/n_e_i = 0). Increase FEs.")
@@ -429,31 +501,31 @@ with main_tabs[1]:
         A_per_unit_m2 = A_total_m2 / max(units_used, 1)
         A_per_unit_cm2 = A_per_unit_m2 * 1e4
 
-        # Product rates for sized area
-        prod_rows = []
+        # Product rates at this size (gas/liquid separated)
+        gas_rows, liq_rows = [], []
+        gas_total_slpm = 0.0
         for p in PRODUCT_LIST:
             fe_frac = fe_to_frac(fe_map_sz.get(p, 0.0))
-            n_e = PRODUCTS[p]["n_e"]
+            n_e = PRODUCT_MAP[p]["nₑ⁻ to product"]
             n_p = prod_mol_s(I_total_sz, fe_frac, n_e)
-            slpm_p = mol_s_to_slpm(n_p, molar_vol_global)
-            prod_rows.append((p, slpm_p))
+            if PRODUCT_MAP[p]["Phase"].lower() == "gas":
+                slpm_p = mol_s_to_slpm(n_p, mv_L_per_mol)
+                gas_rows.append((p, slpm_p))
+                gas_total_slpm += slpm_p
+            else:
+                kg_h, L_h = mflow_to_mass_and_vol(n_p, PRODUCT_MAP[p]["MW (g/mol)"], PRODUCT_MAP[p]["ρ_liq (kg/L)"])
+                liq_rows.append((p, n_p, kg_h, L_h if L_h else 0.0))
 
         P_total_kW_sz = (I_total_sz * V_cell_sz) / 1000.0
         util_sz = 1.0 / max(S_sz, EPS)
 
         show_cm2 = st.toggle("Display resultant area in cm²", value=False, key="sz_area_toggle")
         if show_cm2:
-            area_unit_label = "cm²"
-            total_area_display = A_total_cm2
-            per_unit_area_display = A_per_unit_cm2
-            fmt_total = "{:,.0f}"
-            fmt_per_unit = "{:,.0f}"
+            area_unit_label = "cm²"; total_area_display = A_total_cm2; per_unit_area_display = A_per_unit_cm2
+            fmt_total, fmt_per_unit = "{:,.0f}", "{:,.0f}"
         else:
-            area_unit_label = "m²"
-            total_area_display = A_total_m2
-            per_unit_area_display = A_per_unit_m2
-            fmt_total = "{:.3f}"
-            fmt_per_unit = "{:.4f}"
+            area_unit_label = "m²"; total_area_display = A_total_m2; per_unit_area_display = A_per_unit_m2
+            fmt_total, fmt_per_unit = "{:.3f}", "{:.4f}"
 
         st.subheader("Sizing Results")
         c1, c2, c3 = st.columns(3)
@@ -467,31 +539,144 @@ with main_tabs[1]:
             st.metric("CO₂ Minimum (SLPM)", f"{co2_min_slpm_sz:.3f}")
             st.metric("Utilization (%)", f"{util_sz*100:.1f}")
 
-        st.caption("Per-unit metrics assume equal area per unit. Uncheck 'Use a stack' in Global Settings for single-unit sizing.")
+        st.subheader("Resulting Gas Products (SLPM)")
+        if gas_rows:
+            colsG = st.columns(len(gas_rows))
+            for i, (p, slpm_p) in enumerate(gas_rows):
+                with colsG[i]: st.metric(p, f"{slpm_p:.3f}")
+            st.write(f"**Gas products total (SLPM)**: {gas_total_slpm:.3f}")
 
-        st.subheader("Resulting Product Rates (SLPM) for sized area")
-        colsR = st.columns(len(PRODUCT_LIST))
-        for i, (p, slpm_p) in enumerate(prod_rows):
-            with colsR[i]:
-                st.metric(p, f"{slpm_p:.3f}")
+        st.subheader("Resulting Liquid Products")
+        if liq_rows:
+            df_liq_sz = pd.DataFrame([{"Product": p, "mol/s": n, "kg/h": kg, "L/h": Lh} for (p, n, kg, Lh) in liq_rows])
+            st.dataframe(df_liq_sz, hide_index=True, use_container_width=True)
 
-# -------------------- Sensitivity: CO₂ Utilization --------------------
-with main_tabs[2]:
-    st.header("Sensitivity: CO₂ Utilization")
-    st.caption("Sweep Utilization (%) or view composition vs S. FE is held constant.")
+# -------------------- Tab: Sensitivity (Single-Param) --------------------
+with tab_s1:
+    st.subheader("Sensitivity Analysis (Single-Parameter Sweep)")
+    st.caption("Explore how area, current, and utilization change as you vary one parameter.")
+
+    colA, colB, colC, colD = st.columns(4)
+    with colA:
+        indep_var = st.selectbox(
+            "Independent variable (x-axis)",
+            options=["FE (%)", "Current density (mA/cm²)", "Stoichiometric excess (×)", "CO₂ inlet flow (SLPM)"],
+            index=0,
+            key="sens_indep",
+        )
+    with colB:
+        if indep_var == "FE (%)":
+            vmin, vmax, vstep = 0.0, 100.0, 2.0
+        elif indep_var == "Current density (mA/cm²)":
+            vmin, vmax, vstep = 50.0, 1000.0, 10.0
+        elif indep_var == "Stoichiometric excess (×)":
+            vmin, vmax, vstep = 1.0, 5.0, 0.1
+        else:
+            vmin, vmax, vstep = 0.5, 20.0, 0.5
+
+        range_min = st.number_input("Range min", value=float(vmin), key="sens_min")
+    with colC:
+        range_max = st.number_input("Range max", value=float(vmax), key="sens_max")
+    with colD:
+        range_step = st.number_input("Step", value=float(vstep), key="sens_step")
+
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        base_inlet_slpm = st.number_input("Base inlet (SLPM)", value=5.0, min_value=0.0, step=0.1, key="sens_base_inlet")
+    with col2:
+        base_stoich = st.number_input("Base stoich (×)", value=2.0, min_value=1.0, step=0.1, key="sens_base_stoich")
+    with col3:
+        base_j = st.number_input("Base j (mA/cm²)", value=200.0, min_value=1.0, step=10.0, key="sens_base_j")
+    with col4:
+        base_FE = st.number_input("Base FE to CO (%)", value=90.0, min_value=0.0, max_value=100.0, step=1.0, key="sens_base_FE")
+    with col5:
+        base_ne = st.number_input("nₑ⁻ per CO", value=2, min_value=1, step=1, key="sens_base_ne")
+
+    x_vals, rows = [], []
+    x = range_min
+    effective_step = range_step if range_step != 0 else (range_max - range_min) / 50.0 if range_max > range_min else 1.0
+
+    while (x <= range_max and effective_step > 0) or (x >= range_max and effective_step < 0):
+        if indep_var == "FE (%)":
+            FE = x; j = base_j; stoich = base_stoich; inlet = base_inlet_slpm
+        elif indep_var == "Current density (mA/cm²)":
+            FE = base_FE; j = max(x, 1e-6); stoich = base_stoich; inlet = base_inlet_slpm
+        elif indep_var == "Stoichiometric excess (×)":
+            FE = base_FE; j = base_j; stoich = max(x, 1.0); inlet = base_inlet_slpm
+        else:
+            FE = base_FE; j = base_j; stoich = base_stoich; inlet = max(x, 0.0)
+
+        mol_s_inlet = (inlet / mv_L_per_mol) / SECONDS_PER_MIN
+        mol_s_consumed_th = mol_s_inlet / max(stoich, 1e-12)
+        mol_s_CO = mol_s_consumed_th * (FE / 100.0)
+        I_required = base_ne * F * mol_s_CO
+        area_cm2 = I_required / max(j / 1000.0, 1e-12)
+        area_m2 = area_cm2 / 1e4
+        util_CO = (mol_s_CO / mol_s_inlet) if mol_s_inlet > 0 else 0.0
+
+        rows.append({
+            "x": x,
+            "Active area (cm²)": area_cm2,
+            "Active area (m²)": area_m2,
+            "Total current (A)": I_required,
+            "CO utilization (%)": util_CO * 100.0,
+            "CO production (mol/s)": mol_s_CO,
+        })
+        x += effective_step
+
+    sens_df = pd.DataFrame(rows)
+
+    st.markdown("### Outputs to plot")
+    plot_cols = st.multiselect(
+        "Choose outputs to plot vs x-axis",
+        options=["Active area (cm²)", "Active area (m²)", "Total current (A)", "CO utilization (%)", "CO production (mol/s)"],
+        default=["Active area (cm²)", "CO utilization (%)"],
+        key="sens_outputs",
+    )
+
+    long_df = sens_df.melt(
+        id_vars=["x"],
+        value_vars=plot_cols if plot_cols else [],
+        var_name="metric",
+        value_name="value",
+    )
+
+    x_label = indep_var
+
+    if not long_df.empty:
+        chart = (
+            alt.Chart(long_df)
+            .mark_line()
+            .encode(
+                x=alt.X("x:Q", title=x_label),
+                y=alt.Y("value:Q", title=None),
+                color=alt.Color("metric:N", title="Output"),
+                tooltip=[alt.Tooltip("x:Q", title=x_label), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=",.4g")],
+            )
+            .properties(height=380)
+        )
+        st.altair_chart(chart, use_container_width=True)
+    else:
+        st.info("Select at least one output to plot.")
+
+    with st.expander("Show sensitivity table (first 200 rows)"):
+        st.dataframe(sens_df.head(200), use_container_width=True)
+
+# -------------------- Tab: Sensitivity — CO₂ Utilization (Gas Only) --------------------
+with tab_s2:
+    st.subheader("Sensitivity: CO₂ Utilization (Gas flows & composition only)")
 
     col1, col2, col3 = st.columns(3)
     with col1:
         area_u = st.number_input("Area per unit (cm²)", min_value=0.0, value=100.0, step=5.0, key="u_area")
-        j_u = st.number_input("Current density (mA/cm²)", min_value=0.0, value=200.0, step=10.0, key="u_j")
-        V_u = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="u_V")
+        j_u    = st.number_input("Current density (mA/cm²)", min_value=0.0, value=200.0, step=10.0, key="u_j")
+        V_u    = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="u_V")
     with col2:
         fe_map_u = fe_grid_inputs("u", PRODUCT_LIST, title="FE split (%)", per_row=3)
         units_u = n_units_global if use_stack_global else 1
         st.info(f"Using global stack setting: {units_u} unit(s).")
     with col3:
-        molar_vol_u = molar_vol_global
-        st.write(f"**Gas basis:** {molar_vol_u:.3f} L/mol")
+        st.write(f"**Gas basis:** {mv_L_per_mol:.3f} L/mol")
 
     Umin = st.number_input("Utilization min (%)", min_value=1.0, value=20.0, step=1.0, key="u_min")
     Umax = st.number_input("Utilization max (%)", min_value=1.0, value=100.0, step=1.0, key="u_max")
@@ -500,63 +685,52 @@ with main_tabs[2]:
     inp_u = ElectrolyzerInputs(
         area_value=area_u, area_unit="cm²", j_value=j_u, j_unit="mA/cm²",
         V_cell=V_u, fe_map_pct=fe_map_u,
-        n_units=units_u, molar_vol_L=molar_vol_u,
-        mode="S", stoich_ratio=1.0
+        n_units=units_u, molar_vol_L=mv_L_per_mol,
     )
     core_u = compute_core_products(inp_u)
 
     df_util = build_sensitivity_table_U(core_u, Umin, Umax, Ustep)
-    value_vars_flows = [f"{p} (SLPM)" for p in PRODUCT_LIST] + ["CO2 Outlet (SLPM)"]
-    df_flows = df_util.melt(
-        id_vars=["Utilization (%)"],
-        value_vars=value_vars_flows,
-        var_name="Stream", value_name="SLPM"
-    )
+
+    value_vars_flows = ["CO2 Outlet (SLPM)"] + [f"{p} (SLPM)" for p in GASES]
+    df_flows = df_util.melt(id_vars=["Utilization (%)"], value_vars=value_vars_flows, var_name="Stream", value_name="SLPM")
     chart_flows = alt.Chart(df_flows).mark_line(point=True).encode(
         x=alt.X("Utilization (%):Q"),
         y=alt.Y("SLPM:Q"),
         color="Stream:N",
-        tooltip=["Utilization (%)", "Stream", "SLPM"]
-    ).properties(title="Outlet flows vs Utilization (%)", height=320)
+        tooltip=["Utilization (%)","Stream","SLPM"]
+    ).properties(title="Outlet gas flows vs Utilization (%)", height=320)
 
     df_sens_S = build_sensitivity_table_S(core_u, S_min=1.0, S_max=max(1.0, 1.0/(Umin/100.0)), S_step=0.5)
-    value_vars_comp = ["CO2 vol%"] + [f"{p} vol%" for p in PRODUCT_LIST]
-    df_comp = df_sens_S.melt(
-        id_vars=["Stoich S (inlet/min)"],
-        value_vars=value_vars_comp,
-        var_name="Species", value_name="vol%"
-    )
+    value_vars_comp = ["CO2 vol%"] + [f"{p} vol%" for p in GASES]
+    df_comp = df_sens_S.melt(id_vars=["Stoich S (inlet/min)"], value_vars=value_vars_comp, var_name="Species", value_name="vol%")
     chart_comp = alt.Chart(df_comp).mark_line(point=True).encode(
         x=alt.X("Stoich S (inlet/min):Q"),
         y=alt.Y("vol%:Q"),
         color="Species:N",
-        tooltip=["Stoich S (inlet/min)", "Species", "vol%"]
-    ).properties(title="Outlet composition vs Stoich S", height=320)
+        tooltip=["Stoich S (inlet/min)","Species","vol%"]
+    ).properties(title="Gas composition vs Stoich S", height=320)
 
     left, right = st.columns(2)
-    with left:
-        st.altair_chart(chart_flows, use_container_width=True)
-    with right:
-        st.altair_chart(chart_comp, use_container_width=True)
+    with left:  st.altair_chart(chart_flows, use_container_width=True)
+    with right: st.altair_chart(chart_comp,  use_container_width=True)
 
     st.download_button(
         "Download utilization sweep (CSV)",
         data=df_util.to_csv(index=False).encode("utf-8"),
-        file_name="utilization_sweep.csv",
+        file_name="utilization_sweep_gas.csv",
         mime="text/csv",
         key="u_dl"
     )
 
-# -------------------- Sensitivity: Area × Stack --------------------
-with main_tabs[3]:
-    st.header("Sensitivity: Area × Stack")
-    st.caption("Sweep active area per unit and # of units. Visualize production, power, and CO₂ needs.")
+# -------------------- Tab: Sensitivity — Area × Stack / CO₂ Cap --------------------
+with tab_s3:
+    st.subheader("Sensitivity: Area × Stack (gas SLPM + liquid kg/h) + CO₂ Cap")
 
     col1, col2, col3 = st.columns(3)
     with col1:
         j_value1 = st.number_input("Current density", min_value=0.0, value=200.0, step=10.0, key="axs_j")
-        j_unit1 = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="axs_j_unit")
-        V_cell1 = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="axs_V")
+        j_unit1  = st.selectbox("j units", ["mA/cm²","A/cm²","A/m²"], index=0, key="axs_j_unit")
+        V_cell1  = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="axs_V")
     with col2:
         fe_map1 = fe_grid_inputs("axs", PRODUCT_LIST, title="FE split (%)", per_row=3)
         S1 = st.number_input("Stoich S for sweep", min_value=1.0, value=2.0, step=0.1, key="axs_S")
@@ -579,39 +753,41 @@ with main_tabs[3]:
         for n_units1 in n_vals:
             I_total = I_unit * n_units1
 
-            prod_slpm = {}
+            gas_slpm_map = {}
+            liq_kg_h_map = {}
             co2_min_mol_s = 0.0
+
             for p in PRODUCT_LIST:
                 fe_frac = fe_to_frac(fe_map1.get(p, 0.0))
-                n_e = PRODUCTS[p]["n_e"]
+                n_e = PRODUCT_MAP[p]["nₑ⁻ to product"]
                 n_p = prod_mol_s(I_total, fe_frac, n_e)
-                prod_slpm[p] = mol_s_to_slpm(n_p, molar_vol_global)
-                co2_min_mol_s += n_p * PRODUCTS[p]["co2_per_mol"]
 
-            co2_min_slpm = mol_s_to_slpm(co2_min_mol_s, molar_vol_global)
+                if PRODUCT_MAP[p]["Phase"].lower() == "gas":
+                    gas_slpm_map[p] = mol_s_to_slpm(n_p, mv_L_per_mol)
+                else:
+                    kg_h, _ = mflow_to_mass_and_vol(n_p, PRODUCT_MAP[p]["MW (g/mol)"], PRODUCT_MAP[p]["ρ_liq (kg/L)"])
+                    liq_kg_h_map[p] = kg_h
+
+                co2_min_mol_s += n_p * PRODUCT_MAP[p]["co2_per_mol"]
+
+            co2_min_slpm = mol_s_to_slpm(co2_min_mol_s, mv_L_per_mol)
             co2_in_slpm = S1 * co2_min_slpm
             P_total_kW = (I_total * V_cell1) / 1000.0
 
-            row = {
-                "Area_cm2": area_cm2,
-                "Units": int(n_units1),
-                "CO2_min_SLPM": co2_min_slpm,
-                "CO2_in_SLPM": co2_in_slpm,
-                "Power_kW": P_total_kW
-            }
-            for p in PRODUCT_LIST:
-                row[f"{p}_SLPM"] = prod_slpm[p]
+            row = {"Area_cm2": area_cm2, "Units": int(n_units1), "CO2_min_SLPM": co2_min_slpm, "CO2_in_SLPM": co2_in_slpm, "Power_kW": P_total_kW}
+            for p in GASES:   row[f"{p}_SLPM"] = gas_slpm_map.get(p, 0.0)
+            for p in LIQUIDS: row[f"{p}_kg_h"]  = liq_kg_h_map.get(p, 0.0)
             rows.append(row)
 
     df_grid = pd.DataFrame(rows)
 
-    metric_choices = [f"{p}_SLPM" for p in PRODUCT_LIST] + ["CO2_in_SLPM", "CO2_min_SLPM", "Power_kW"]
+    metric_choices = [f"{p}_SLPM" for p in GASES] + [f"{p}_kg_h" for p in LIQUIDS] + ["CO2_in_SLPM", "CO2_min_SLPM", "Power_kW"]
     metric = st.selectbox("Heatmap metric", metric_choices, index=0, key="axs_metric")
     heat = alt.Chart(df_grid).mark_rect().encode(
         x=alt.X("Area_cm2:O", title="Area per unit (cm²)"),
         y=alt.Y("Units:O", title="# of Units"),
         color=alt.Color(f"{metric}:Q", title=metric),
-        tooltip=["Area_cm2", "Units"] + metric_choices
+        tooltip=["Area_cm2","Units"] + metric_choices
     ).properties(height=420)
     st.altair_chart(heat, use_container_width=True)
 
@@ -623,205 +799,29 @@ with main_tabs[3]:
         key="axs_dl"
     )
 
-# -------------------- Sensitivity: CO₂ Supply Cap --------------------
-with main_tabs[4]:
-    st.header("Sensitivity: CO₂ Supply Cap")
-    st.caption("Impose a maximum CO₂ inlet and evaluate feasibility, utilization, and recommendations.")
+    st.markdown("---")
+    st.subheader("CO₂ Supply Cap (quick check)")
+    co2_cap = st.number_input("CO₂ supply cap (SLPM)", min_value=0.0, value=50.0, step=1.0, key="cap_cap")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        area_value2 = st.number_input("Area per unit (cm²)", min_value=0.0, value=100.0, step=5.0, key="cap_area")
-        j_value2 = st.number_input("Current density", min_value=0.0, value=200.0, step=10.0, key="cap_j")
-        j_unit2 = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="cap_j_unit")
-    with col2:
-        V_cell2 = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="cap_V")
-        fe_map2 = fe_grid_inputs("cap", PRODUCT_LIST, title="FE split (%)", per_row=3)
-    with col3:
-        n_units2 = n_units_global if use_stack_global else 1
-        st.info(f"Using global stack setting: {n_units2} unit(s).")
-        co2_cap = st.number_input("CO₂ supply cap (SLPM)", min_value=0.0, value=50.0, step=1.0, key="cap_cap")
+    if not df_grid.empty:
+        row0 = df_grid.iloc[0]
+        co2_min_slpm2 = float(row0["CO2_min_SLPM"])
+    else:
+        co2_min_slpm2 = 0.0
 
-    A_m2 = area_value2 * 1e-4
-    j_A_m2 = to_A_per_m2(j_value2, j_unit2)
-    I_unit = amps(A_m2, j_A_m2)
-    I_total = I_unit * n_units2
-
-    co2_min_mol_s = 0.0
-    for p in PRODUCT_LIST:
-        fe_frac = fe_to_frac(fe_map2.get(p, 0.0))
-        n_e = PRODUCTS[p]["n_e"]
-        n_p = prod_mol_s(I_total, fe_frac, n_e)
-        co2_min_mol_s += n_p * PRODUCTS[p]["co2_per_mol"]
-    co2_min_slpm2 = mol_s_to_slpm(co2_min_mol_s, molar_vol_global)
-
-    P_total_kW2 = (I_total * V_cell2) / 1000.0
     S_min_cap = (co2_cap / max(co2_min_slpm2, EPS)) if co2_min_slpm2 > 0 else np.inf
     util_max_cap = min(1.0, 1.0 / max(S_min_cap, EPS))
 
-    st.subheader("Results under cap")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3 = st.columns(3)
     with c1: st.metric("CO₂ Minimum (SLPM)", f"{co2_min_slpm2:.3f}")
     with c2: st.metric("CO₂ Cap (SLPM)", f"{co2_cap:.3f}")
     with c3: st.metric("Max Utilization allowed", f"{100*util_max_cap:.1f}%")
-    with c4: st.metric("Total Power (kW)", f"{P_total_kW2:.2f}")
 
     if np.isinf(S_min_cap) or co2_cap < co2_min_slpm2:
         st.warning("Cap is below the theoretical minimum CO₂ required at these operating conditions. Reduce current (j), area, units, or adjust FE split.")
     else:
         st.success("Feasible. You may increase utilization up to the shown maximum by reducing S accordingly.")
 
-# -------------------- Monte Carlo --------------------
-with main_tabs[5]:
-    st.header("Monte Carlo")
-    st.caption("Sample uncertainties in FE, j, V, area, and S to see distributions of outputs.")
-
-    left, right = st.columns([1,1])
-    with left:
-        N = st.number_input("Samples (N)", min_value=100, value=5000, step=100, key="mc_N")
-        seed = st.number_input("Random seed", min_value=0, value=42, step=1, key="mc_seed")
-        np.random.seed(seed)
-
-        area_mc = st.number_input("Area per unit (cm²) — mean", min_value=0.0, value=100.0, step=1.0, key="mc_area_mean")
-        area_cv = st.number_input("Area coefficient of variation (%)", min_value=0.0, value=5.0, step=0.5, key="mc_area_cv")
-
-        j_mc = st.number_input("j (mA/cm²) — mean", min_value=0.0, value=200.0, step=10.0, key="mc_j_mean")
-        j_cv = st.number_input("j coefficient of variation (%)", min_value=0.0, value=5.0, step=0.5, key="mc_j_cv")
-
-        V_mc = st.number_input("Cell voltage (V) — mean", min_value=0.0, value=3.2, step=0.1, key="mc_V_mean")
-        V_cv = st.number_input("Voltage coefficient of variation (%)", min_value=0.0, value=2.0, step=0.5, key="mc_V_cv")
-
-        units_mc = n_units_global if use_stack_global else 1
-        st.info(f"Using global stack setting: {units_mc} unit(s).")
-
-        S_mean = st.number_input("S — mean", min_value=1.0, value=2.0, step=0.1, key="mc_S_mean")
-        S_cv = st.number_input("S coefficient of variation (%)", min_value=0.0, value=5.0, step=0.5, key="mc_S_cv")
-
-    with right:
-        fe_mean, fe_sd = fe_mean_stdev_grid("mc", PRODUCT_LIST)
-
-    def lognormal_samples(mean, cv_pct, size):
-        if mean <= 0:
-            return np.zeros(size)
-        cv = cv_pct / 100.0
-        if cv <= 0:
-            return np.full(size, mean)
-        sigma2 = np.log(1 + cv**2)
-        mu = np.log(max(mean, EPS)) - 0.5 * sigma2
-        sigma = np.sqrt(sigma2)
-        return np.random.lognormal(mean=mu, sigma=sigma, size=size)
-
-    area_s = lognormal_samples(area_mc, area_cv, N)
-    j_s = lognormal_samples(j_mc, j_cv, N)
-    V_s = lognormal_samples(V_mc, V_cv, N)
-    S_s = np.maximum(1.0, lognormal_samples(S_mean, S_cv, N))
-
-    def truncnorm(mean, sd, size):
-        x = np.random.normal(mean, sd, size)
-        return np.clip(np.nan_to_num(x, nan=0.0), 0.0, 100.0)
-
-    fe_samples = {p: truncnorm(fe_mean[p], fe_sd[p], N) for p in PRODUCT_LIST}
-    fe_stack = np.vstack([fe_samples[p] for p in PRODUCT_LIST]).T
-    fe_sum = fe_stack.sum(axis=1)
-    scale = np.where(fe_sum > 100.0, 100.0 / np.maximum(fe_sum, EPS), 1.0)
-    fe_stack = (fe_stack.T * scale).T
-    for i, p in enumerate(PRODUCT_LIST):
-        fe_samples[p] = fe_stack[:, i]
-
-    results = {"CO2_min_SLPM": [], "CO2_in_SLPM": [], "Utilization_frac": [], "Power_kW": []}
-    for p in PRODUCT_LIST:
-        results[f"{p}_SLPM"] = []
-
-    for i in range(N):
-        A_m2_i = area_s[i] * 1e-4
-        j_A_m2_i = j_s[i] * 10.0
-        I_unit_i = amps(A_m2_i, j_A_m2_i)
-        I_total_i = I_unit_i * max(1, units_mc)
-
-        co2_min_mol_s_i = 0.0
-        for p in PRODUCT_LIST:
-            fe_frac_i = fe_samples[p][i] / 100.0
-            n_e = PRODUCTS[p]["n_e"]
-            n_p_i = prod_mol_s(I_total_i, fe_frac_i, n_e)
-            slpm_p_i = mol_s_to_slpm(n_p_i, molar_vol_global)
-            results[f"{p}_SLPM"].append(slpm_p_i)
-            co2_min_mol_s_i += n_p_i * PRODUCTS[p]["co2_per_mol"]
-
-        co2_min_slpm_i = mol_s_to_slpm(co2_min_mol_s_i, molar_vol_global)
-        results["CO2_min_SLPM"].append(co2_min_slpm_i)
-
-        S_i = max(1.0, S_s[i])
-        co2_in_slpm_i = S_i * co2_min_slpm_i
-        util_i = 1.0 / S_i
-        results["CO2_in_SLPM"].append(co2_in_slpm_i)
-        results["Utilization_frac"].append(util_i)
-
-        Vnow = max(V_s[i], EPS)
-        results["Power_kW"].append((I_total_i * Vnow) / 1000.0)
-
-    df_mc = pd.DataFrame(results)
-
-    st.subheader("Distributions")
-    plot_cols = st.columns(2)
-    with plot_cols[0]:
-        chart_util = alt.Chart(df_mc).mark_bar().encode(
-            x=alt.X("Utilization_frac:Q", bin=alt.Bin(maxbins=40), title="Utilization (fraction)"),
-            y=alt.Y("count()", title="Count")
-        ).properties(title="Utilization distribution", height=300)
-        st.altair_chart(chart_util, use_container_width=True)
-
-        chart_pwr = alt.Chart(df_mc).mark_bar().encode(
-            x=alt.X("Power_kW:Q", bin=alt.Bin(maxbins=40), title="Power (kW)"),
-            y=alt.Y("count()", title="Count")
-        ).properties(title="Power distribution", height=300)
-        st.altair_chart(chart_pwr, use_container_width=True)
-
-    with plot_cols[1]:
-        chart_cmin = alt.Chart(df_mc).mark_bar().encode(
-            x=alt.X("CO2_min_SLPM:Q", bin=alt.Bin(maxbins=40), title="CO₂ minimum (SLPM)"),
-            y=alt.Y("count()", title="Count")
-        ).properties(title="CO₂ minimum distribution", height=300)
-        st.altair_chart(chart_cmin, use_container_width=True)
-
-        chart_cin = alt.Chart(df_mc).mark_bar().encode(
-            x=alt.X("CO2_in_SLPM:Q", bin=alt.Bin(maxbins=40), title="CO₂ inlet (SLPM)"),
-            y=alt.Y("count()", title="Count")
-        ).properties(title="CO₂ inlet distribution", height=300)
-        st.altair_chart(chart_cin, use_container_width=True)
-
-    st.subheader("Product distributions")
-    prod_to_plot = st.multiselect("Select products to plot", PRODUCT_LIST, default=[PRODUCT_LIST[0]], key="mc_plot_sel")
-    if prod_to_plot:
-        charts = []
-        for p in prod_to_plot:
-            c = alt.Chart(df_mc).mark_bar().encode(
-                x=alt.X(f"{p}_SLPM:Q", bin=alt.Bin(maxbins=40), title=f"{p} (SLPM)"),
-                y=alt.Y("count()", title="Count")
-            ).properties(title=f"{p}", height=220)
-            charts.append(c)
-        st.altair_chart(alt.vconcat(*charts), use_container_width=True)
-
-    st.download_button(
-        "Download Monte Carlo results (CSV)",
-        data=df_mc.to_csv(index=False).encode("utf-8"),
-        file_name="cheese_monte_carlo.csv",
-        mime="text/csv",
-        key="mc_dl"
-    )
-
-# -------------------- Constants --------------------
-with main_tabs[6]:
-    st.header("Constants & Reference Reactions")
-    st.markdown(f"""
-- **Faraday constant (F):** {F:.5f} C·mol⁻¹ e⁻  
-- **Molar volume bases:** STP = {MV_OPTIONS['STP (0°C, 1 atm) — 22.414 L/mol']:.3f} L·mol⁻¹; SATP = {MV_OPTIONS['SATP (25°C, 1 atm) — 24.465 L/mol']:.3f} L·mol⁻¹  
-- **Products currently enabled:** {", ".join(PRODUCT_LIST)}
-""")
-
-    st.subheader("nₑ and CO₂ stoichiometry (fixed)")
-    df_props = pd.DataFrame({
-        "Product": PRODUCT_LIST,
-        "nₑ (e⁻/mol product)": [PRODUCTS[p]["n_e"] for p in PRODUCT_LIST],
-        "CO₂ per mol product":  [PRODUCTS[p]["co2_per_mol"] for p in PRODUCT_LIST],
-        "E⁰ (V) [EE display only]":  [PRODUCTS[p]["E0"] for p in PRODUCT_LIST],
-    })
-    st.dataframe(df_props, hide_index=True, width='stretch')
+# -------------------- Footer --------------------
+st.markdown("---")
+st.caption("© 2025 Aditya Prajapati · CHEESE")
