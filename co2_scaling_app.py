@@ -56,8 +56,8 @@ DEFAULT_PRODUCTS = {
     "C2H4":    {"n_e": 12, "co2_per_mol": 2.0, "E0": 1.17},
     "CH3OH":   {"n_e": 6,  "co2_per_mol": 1.0, "E0": 0.02},
     "C2H5OH":  {"n_e": 12, "co2_per_mol": 2.0, "E0": 0.08},
-    "MGO (Methyl Glyoxal)":     {"n_e": 12, "co2_per_mol": 3.0, "E0": 0.10},  # methylglyoxal (C3)
-    "HCOO":    {"n_e": 2,  "co2_per_mol": 1.0, "E0": 0.20},  # formate
+    "MGO (Methylglyoxal)":     {"n_e": 12, "co2_per_mol": 3.0, "E0": 0.10},  # methylglyoxal (C3)
+    "HCOO- (Formate)":    {"n_e": 2,  "co2_per_mol": 1.0, "E0": 0.20},  # formate
 }
 if "PRODUCTS" not in st.session_state:
     st.session_state.PRODUCTS = DEFAULT_PRODUCTS.copy()
