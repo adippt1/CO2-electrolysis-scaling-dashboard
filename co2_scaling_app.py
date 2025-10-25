@@ -17,7 +17,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("🧀 CHEESE — CO₂ Handling & Electrolysis Scaling Evaluator")
+st.title("🧀 CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
 st.caption("Because scaling electrolysis shouldn’t be this gouda!")
 
 st.markdown(
