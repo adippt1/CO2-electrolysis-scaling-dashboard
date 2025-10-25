@@ -377,7 +377,9 @@ with tab_instructions:
     st.markdown("---")
     st.subheader("References")
     st.markdown("""
-    1. [Nitopi, Stephanie, et al. "Progress and perspectives of electrochemical CO2 reduction on copper in aqueous electrolyte." Chemical reviews 119.12 (2019): 7610-7672.](https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705)
+    1. [Nitopi, Stephanie, et al. "Progress and perspectives of electrochemical CO2 reduction on copper in aqueous electrolyte." 
+    Chemical reviews 119.12 (2019): 7610-7672.](https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705)
+    """)
 
 # -------------------- Tab: Calculator (Area/j with S or Inlet) --------------------
 with tab_calc:
