@@ -314,7 +314,7 @@ st.sidebar.markdown("---")
 
 # -------------------- UI --------------------
 st.title("🧀 CHEESE: CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
-st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO, HCOO | Calculators + sensitivities + Monte Carlo")
+st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO (Methylglyoxal), HCOO (Formate) | Calculators + sensitivities + Monte Carlo")
 
 main_tabs = st.tabs([
     "Calculator",
