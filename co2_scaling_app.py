@@ -70,7 +70,7 @@ mv_m3_per_mol = mv_L_per_mol / 1000.0  # m³/mol
 use_stack_global = st.sidebar.checkbox("Use a stack (multiple identical units)?", value=True, key="gs_stack")
 n_units_global = st.sidebar.number_input("Number of units in stack", min_value=1, value=10, step=1, key="gs_units")
 
-# -------------------- Helper: numeric sanitizer (Arrow-safe) --------------------
+# -------------------- Helper: numeric sanitizer  --------------------
 NUMERIC_COLS = {
     "MW (g/mol)",
     "nₑ⁻ to product",
@@ -103,7 +103,7 @@ def sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = pd.to_numeric(series, errors="coerce").astype(float)
     return out
 
-# -------------------- Product properties (single source of truth) --------------------
+# -------------------- Product properties  --------------------
 
 # MGO is the only E0 I calculated digging data through the internet. 
 #Rest of the E0 are from this excellent review article: https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705
@@ -318,7 +318,7 @@ with tab_instructions:
             - CO₂ utilization (%)  
             - Power and total current
             
-            - Stoich is the "Stoichiometry". It is the ratio of actual CO₂ fed to the theoretical minimum CO₂ required to produce the observed products.
+        Stoich is the "Stoichiometry". It is the ratio of actual CO₂ fed to the theoretical minimum CO₂ required to produce the observed products.
                
                 • S = 1 means 100% CO₂ utilization (no excess feed).
                
