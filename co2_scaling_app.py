@@ -320,7 +320,7 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True,
 )
-st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO (Methylglyoxal), HCOO (Formate) | Calculators + sensitivities + Monte Carlo")
+st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO (Methylglyoxal), HCOO- (Formate) | Calculators + sensitivities + Monte Carlo")
 
 main_tabs = st.tabs([
     "Calculator",
