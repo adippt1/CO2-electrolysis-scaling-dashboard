@@ -109,15 +109,15 @@ def sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
 #Rest of the E0 are from this excellent review article: https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705
 PRODUCTS: List[Dict] = [
     # Gases
-    {"Product": "CO",         "Phase": "gas",    "MW (g/mol)": 28.010, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 10.1,  "HHV (MJ/kg)": 12.6, "ρ_liq (kg/L)": np.nan, "E0 (V) [Total Cell]": 1.33},
-    {"Product": "H₂",         "Phase": "gas",    "MW (g/mol)": 2.016,  "nₑ⁻ to product": 2,  "co2_per_mol": 0.0, "LHV (MJ/kg)": 120.0, "HHV (MJ/kg)": 141.9,"ρ_liq (kg/L)": np.nan, "E0 (V) [Total Cell]": 1.23},
-    {"Product": "CH₄",        "Phase": "gas",    "MW (g/mol)": 16.043, "nₑ⁻ to product": 8,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 50.0,  "HHV (MJ/kg)": 55.5, "ρ_liq (kg/L)": np.nan, "E0 (V) [Total Cell]": 1.06},
-    {"Product": "C₂H₄",       "Phase": "gas",    "MW (g/mol)": 28.054, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 47.2,  "HHV (MJ/kg)": 51.9, "ρ_liq (kg/L)": np.nan, "E0 (V) [Total Cell]": 1.15},
+    {"Product": "CO",         "Phase": "gas",    "MW (g/mol)": 28.010, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 10.1,  "HHV (MJ/kg)": 12.6, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.33},
+    {"Product": "H₂",         "Phase": "gas",    "MW (g/mol)": 2.016,  "nₑ⁻ to product": 2,  "co2_per_mol": 0.0, "LHV (MJ/kg)": 120.0, "HHV (MJ/kg)": 141.9,"ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.23},
+    {"Product": "CH₄",        "Phase": "gas",    "MW (g/mol)": 16.043, "nₑ⁻ to product": 8,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 50.0,  "HHV (MJ/kg)": 55.5, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.06},
+    {"Product": "C₂H₄",       "Phase": "gas",    "MW (g/mol)": 28.054, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 47.2,  "HHV (MJ/kg)": 51.9, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.15},
     # Liquids (at ~25 °C)
-    {"Product": "Methanol",   "Phase": "liquid", "MW (g/mol)": 32.042, "nₑ⁻ to product": 6,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 19.9,  "HHV (MJ/kg)": 22.7, "ρ_liq (kg/L)": 0.791, "E0 (V) [Total Cell]": 1.20},
-    {"Product": "Ethanol",    "Phase": "liquid", "MW (g/mol)": 46.069, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 26.8,  "HHV (MJ/kg)": 29.7, "ρ_liq (kg/L)": 0.789, "E0 (V) [Total Cell]": 1.14},
-    {"Product": "Formate",    "Phase": "liquid", "MW (g/mol)": 46.026, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 5.9,   "HHV (MJ/kg)": 6.3,  "ρ_liq (kg/L)": 1.220, "E0 (V) [Total Cell]": 1.35},
-    {"Product": "MGO",        "Phase": "liquid", "MW (g/mol)": 72.060, "nₑ⁻ to product": 12, "co2_per_mol": 3.0, "LHV (MJ/kg)": np.nan,"HHV (MJ/kg)": np.nan,"ρ_liq (kg/L)": 1.050, "E0 (V) [Total Cell]": 1.25},
+    {"Product": "Methanol",   "Phase": "liquid", "MW (g/mol)": 32.042, "nₑ⁻ to product": 6,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 19.9,  "HHV (MJ/kg)": 22.7, "ρ_liq (kg/L)": 0.791, "E0 (V) [display]": 1.20},
+    {"Product": "Ethanol",    "Phase": "liquid", "MW (g/mol)": 46.069, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 26.8,  "HHV (MJ/kg)": 29.7, "ρ_liq (kg/L)": 0.789, "E0 (V) [display]": 1.14},
+    {"Product": "Formate",    "Phase": "liquid", "MW (g/mol)": 46.026, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 5.9,   "HHV (MJ/kg)": 6.3,  "ρ_liq (kg/L)": 1.220, "E0 (V) [display]": 1.35},
+    {"Product": "MGO",        "Phase": "liquid", "MW (g/mol)": 72.060, "nₑ⁻ to product": 12, "co2_per_mol": 3.0, "LHV (MJ/kg)": np.nan,"HHV (MJ/kg)": np.nan,"ρ_liq (kg/L)": 1.050, "E0 (V) [display]": 1.25},
 ]
 
 PRODUCT_LIST = [p["Product"] for p in PRODUCTS]
