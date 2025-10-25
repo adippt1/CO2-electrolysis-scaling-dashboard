@@ -374,6 +374,8 @@ with tab_instructions:
         use_container_width=True,
         key="download_constants_csv",
     )
+    st.markdown("---")
+    st.subheader("References and Instructions")
 
 # -------------------- Tab: Calculator (Area/j with S or Inlet) --------------------
 with tab_calc:
