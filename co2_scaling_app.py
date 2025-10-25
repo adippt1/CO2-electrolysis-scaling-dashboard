@@ -290,17 +290,17 @@ def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct:
         rows.append(row)
     return pd.DataFrame(rows)
 
-# -------------------- Tabs (Single-Param Sensitivity removed) --------------------
-tab_constants, tab_calc, tab_size, tab_s2, tab_s3 = st.tabs([
-    "Constants",
+# -------------------- Tabs --------------------
+tab_instructions, tab_calc, tab_size, tab_s2, tab_s3 = st.tabs([
+    "Instructions",
     "Calculator",
     "Calc: Area from Inlet & Stoich",
     "Sensitivity: CO₂ Utilization",
     "Sensitivity: Area × Stack / CO₂ Cap",
 ])
 
-# -------------------- Tab: Constants --------------------
-with tab_constants:
+# -------------------- Tab: Instructions --------------------
+with tab_instructions:
     st.subheader("Constants & Properties")
     st.markdown(f"""
 - **Faraday constant (F):** `{F:.5f}` C·mol⁻¹ e⁻  
