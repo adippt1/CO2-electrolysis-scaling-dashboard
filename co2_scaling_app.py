@@ -307,6 +307,8 @@ with tab_instructions:
     
         **Purpose:**  
         This dashboard helps estimate CO₂ electrolyzer scaling parameters, product outputs, and sensitivities.
+        Gas products: H₂, CO, CH₄, C₂H₄
+        Liquid products, Methanol, Ethanol, Formate, Methylglyoxal (MGO)
     
         **Tabs Overview:**
         - **Calculator:**  
