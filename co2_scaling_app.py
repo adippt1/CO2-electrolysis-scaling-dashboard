@@ -318,7 +318,7 @@ with tab_instructions:
             - CO₂ utilization (%)  
             - Power and total current
             
-            P.S. Stoich is the Stoichiometry. It is the ratio of actual CO₂ fed to the theoretical minimum CO₂ required to produce the observed products.
+            - Stoich is the "Stoichiometry". It is the ratio of actual CO₂ fed to the theoretical minimum CO₂ required to produce the observed products.
                
                 • S = 1 means 100% CO₂ utilization (no excess feed).
                
@@ -341,7 +341,7 @@ with tab_instructions:
         - **Constants & Reference (this tab):**  
           Lists all physical constants, product properties, and data sources.
     
-        **Tips:**  
+        💡**Tips:**  
         - You can download any result table via the “Download CSV” buttons.  
         - Hover over plots for tooltips showing precise data points.  
         - Adjust **molar volume basis (STP/SATP)** in the sidebar to update gas volumetric conversions.
