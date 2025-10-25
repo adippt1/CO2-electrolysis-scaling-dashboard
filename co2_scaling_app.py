@@ -314,6 +314,12 @@ st.sidebar.markdown("---")
 
 # -------------------- UI --------------------
 st.title("🧀 CHEESE: CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
+st.markdown(
+    '<div style="font-size:1.05rem; font-weight:600; color:#6b7280; margin-top:-6px;">'
+    'Because scaling electrolysis shouldn’t be this gouda! 🧀'
+    '</div>',
+    unsafe_allow_html=True,
+)
 st.caption("CO₂ → CO, C₂H₄, CH₃OH, C₂H₅OH, MGO (Methylglyoxal), HCOO (Formate) | Calculators + sensitivities + Monte Carlo")
 
 main_tabs = st.tabs([
