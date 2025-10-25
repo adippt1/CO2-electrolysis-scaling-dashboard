@@ -104,8 +104,8 @@ def sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 # -------------------- Product properties (single source of truth) --------------------
-# Keep only one of (Formate, Formic acid) -> keep Formic acid.
-# Add MGO. Include optional E0 (display-only) where available.
+# Rename "Formic acid" -> "Formate".
+# Add MGO, but keep internal key "MGO"; show "Methylglyoxal (MGO)" in the Constants tab.
 PRODUCTS: List[Dict] = [
     # Gases
     {"Product": "CO",         "Phase": "gas",    "MW (g/mol)": 28.010, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 10.1,  "HHV (MJ/kg)": 12.6, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.33},
@@ -115,7 +115,7 @@ PRODUCTS: List[Dict] = [
     # Liquids (at ~25 °C)
     {"Product": "Methanol",   "Phase": "liquid", "MW (g/mol)": 32.042, "nₑ⁻ to product": 6,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 19.9,  "HHV (MJ/kg)": 22.7, "ρ_liq (kg/L)": 0.791, "E0 (V) [display]": 0.02},
     {"Product": "Ethanol",    "Phase": "liquid", "MW (g/mol)": 46.069, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 26.8,  "HHV (MJ/kg)": 29.7, "ρ_liq (kg/L)": 0.789, "E0 (V) [display]": 0.08},
-    {"Product": "Formic acid","Phase": "liquid", "MW (g/mol)": 46.026, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 5.9,   "HHV (MJ/kg)": 6.3,  "ρ_liq (kg/L)": 1.220, "E0 (V) [display]": 0.20},
+    {"Product": "Formate",    "Phase": "liquid", "MW (g/mol)": 46.026, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 5.9,   "HHV (MJ/kg)": 6.3,  "ρ_liq (kg/L)": 1.220, "E0 (V) [display]": 0.20},
     {"Product": "MGO",        "Phase": "liquid", "MW (g/mol)": 72.060, "nₑ⁻ to product": 12, "co2_per_mol": 3.0, "LHV (MJ/kg)": np.nan,"HHV (MJ/kg)": np.nan,"ρ_liq (kg/L)": 1.050, "E0 (V) [display]": 0.10},
 ]
 
@@ -289,12 +289,11 @@ def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct:
         rows.append(row)
     return pd.DataFrame(rows)
 
-# -------------------- Tabs (Overview removed; Constants first) --------------------
-tab_constants, tab_calc, tab_size, tab_s1, tab_s2, tab_s3 = st.tabs([
+# -------------------- Tabs (Single-Param Sensitivity removed) --------------------
+tab_constants, tab_calc, tab_size, tab_s2, tab_s3 = st.tabs([
     "Constants",
     "Calculator",
     "Calc: Area from Inlet & Stoich",
-    "Sensitivity (Single-Param)",
     "Sensitivity: CO₂ Utilization",
     "Sensitivity: Area × Stack / CO₂ Cap",
 ])
@@ -313,7 +312,12 @@ with tab_constants:
 - **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
 """)
 
-    # Controls to display densities
+    # Display name overrides for constants view
+    def display_name(prod_key: str) -> str:
+        if prod_key == "MGO":
+            return "Methylglyoxal (MGO)"
+        return prod_key
+
     c1, c2 = st.columns(2)
     with c1:
         gas_density_unit = st.selectbox(
@@ -330,22 +334,22 @@ with tab_constants:
             key="liq_density_unit",
         )
 
-    # Build displayed table
     raw_df = pd.DataFrame.from_records(PRODUCTS)
     products_df = sanitize_numeric_columns(raw_df)
 
     mw_kg_per_mol = products_df["MW (g/mol)"] / 1000.0
     rho_gas_si = (mw_kg_per_mol / mv_m3_per_mol).where(products_df["Phase"].str.lower().eq("gas"), np.nan)
-    def fmt_gas(kg_per_m3: pd.Series, unit: str) -> pd.Series:
-        return kg_per_m3  # 1 kg/m³ = 1 g/L
-    def fmt_liq(kg_per_L: pd.Series, unit: str) -> pd.Series:
-        return kg_per_L   # 1 kg/L = 1 g/mL
 
+    # Build display dataframe with name override and units
     display_df = products_df[[
         "Product","Phase","MW (g/mol)","nₑ⁻ to product","co2_per_mol","LHV (MJ/kg)","HHV (MJ/kg)","E0 (V) [display]"
     ]].copy()
-    display_df[f"ρ (gas @ {basis_label.split('—')[0].strip()}) [{gas_density_unit}]"] = fmt_gas(rho_gas_si, gas_density_unit)
-    display_df[f"ρ (liquid) [{liq_density_unit}]"] = fmt_liq(products_df["ρ_liq (kg/L)"], liq_density_unit)
+    display_df.insert(0, "Name", display_df["Product"].apply(display_name))
+    display_df.drop(columns=["Product"], inplace=True)
+
+    # Add densities with chosen units (1 kg/m³ = 1 g/L; 1 kg/L = 1 g/mL)
+    display_df[f"ρ (gas @ {basis_label.split('—')[0].strip()}) [{gas_density_unit}]"] = rho_gas_si
+    display_df[f"ρ (liquid) [{liq_density_unit}]"] = products_df["ρ_liq (kg/L)"]
 
     st.dataframe(
         display_df,
@@ -550,117 +554,6 @@ with tab_size:
         if liq_rows:
             df_liq_sz = pd.DataFrame([{"Product": p, "mol/s": n, "kg/h": kg, "L/h": Lh} for (p, n, kg, Lh) in liq_rows])
             st.dataframe(df_liq_sz, hide_index=True, use_container_width=True)
-
-# -------------------- Tab: Sensitivity (Single-Param) --------------------
-with tab_s1:
-    st.subheader("Sensitivity Analysis (Single-Parameter Sweep)")
-    st.caption("Explore how area, current, and utilization change as you vary one parameter.")
-
-    colA, colB, colC, colD = st.columns(4)
-    with colA:
-        indep_var = st.selectbox(
-            "Independent variable (x-axis)",
-            options=["FE (%)", "Current density (mA/cm²)", "Stoichiometric excess (×)", "CO₂ inlet flow (SLPM)"],
-            index=0,
-            key="sens_indep",
-        )
-    with colB:
-        if indep_var == "FE (%)":
-            vmin, vmax, vstep = 0.0, 100.0, 2.0
-        elif indep_var == "Current density (mA/cm²)":
-            vmin, vmax, vstep = 50.0, 1000.0, 10.0
-        elif indep_var == "Stoichiometric excess (×)":
-            vmin, vmax, vstep = 1.0, 5.0, 0.1
-        else:
-            vmin, vmax, vstep = 0.5, 20.0, 0.5
-
-        range_min = st.number_input("Range min", value=float(vmin), key="sens_min")
-    with colC:
-        range_max = st.number_input("Range max", value=float(vmax), key="sens_max")
-    with colD:
-        range_step = st.number_input("Step", value=float(vstep), key="sens_step")
-
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        base_inlet_slpm = st.number_input("Base inlet (SLPM)", value=5.0, min_value=0.0, step=0.1, key="sens_base_inlet")
-    with col2:
-        base_stoich = st.number_input("Base stoich (×)", value=2.0, min_value=1.0, step=0.1, key="sens_base_stoich")
-    with col3:
-        base_j = st.number_input("Base j (mA/cm²)", value=200.0, min_value=1.0, step=10.0, key="sens_base_j")
-    with col4:
-        base_FE = st.number_input("Base FE to CO (%)", value=90.0, min_value=0.0, max_value=100.0, step=1.0, key="sens_base_FE")
-    with col5:
-        base_ne = st.number_input("nₑ⁻ per CO", value=2, min_value=1, step=1, key="sens_base_ne")
-
-    x_vals, rows = [], []
-    x = range_min
-    effective_step = range_step if range_step != 0 else (range_max - range_min) / 50.0 if range_max > range_min else 1.0
-
-    while (x <= range_max and effective_step > 0) or (x >= range_max and effective_step < 0):
-        if indep_var == "FE (%)":
-            FE = x; j = base_j; stoich = base_stoich; inlet = base_inlet_slpm
-        elif indep_var == "Current density (mA/cm²)":
-            FE = base_FE; j = max(x, 1e-6); stoich = base_stoich; inlet = base_inlet_slpm
-        elif indep_var == "Stoichiometric excess (×)":
-            FE = base_FE; j = base_j; stoich = max(x, 1.0); inlet = base_inlet_slpm
-        else:
-            FE = base_FE; j = base_j; stoich = base_stoich; inlet = max(x, 0.0)
-
-        mol_s_inlet = (inlet / mv_L_per_mol) / SECONDS_PER_MIN
-        mol_s_consumed_th = mol_s_inlet / max(stoich, 1e-12)
-        mol_s_CO = mol_s_consumed_th * (FE / 100.0)
-        I_required = base_ne * F * mol_s_CO
-        area_cm2 = I_required / max(j / 1000.0, 1e-12)
-        area_m2 = area_cm2 / 1e4
-        util_CO = (mol_s_CO / mol_s_inlet) if mol_s_inlet > 0 else 0.0
-
-        rows.append({
-            "x": x,
-            "Active area (cm²)": area_cm2,
-            "Active area (m²)": area_m2,
-            "Total current (A)": I_required,
-            "CO utilization (%)": util_CO * 100.0,
-            "CO production (mol/s)": mol_s_CO,
-        })
-        x += effective_step
-
-    sens_df = pd.DataFrame(rows)
-
-    st.markdown("### Outputs to plot")
-    plot_cols = st.multiselect(
-        "Choose outputs to plot vs x-axis",
-        options=["Active area (cm²)", "Active area (m²)", "Total current (A)", "CO utilization (%)", "CO production (mol/s)"],
-        default=["Active area (cm²)", "CO utilization (%)"],
-        key="sens_outputs",
-    )
-
-    long_df = sens_df.melt(
-        id_vars=["x"],
-        value_vars=plot_cols if plot_cols else [],
-        var_name="metric",
-        value_name="value",
-    )
-
-    x_label = indep_var
-
-    if not long_df.empty:
-        chart = (
-            alt.Chart(long_df)
-            .mark_line()
-            .encode(
-                x=alt.X("x:Q", title=x_label),
-                y=alt.Y("value:Q", title=None),
-                color=alt.Color("metric:N", title="Output"),
-                tooltip=[alt.Tooltip("x:Q", title=x_label), alt.Tooltip("metric:N"), alt.Tooltip("value:Q", format=",.4g")],
-            )
-            .properties(height=380)
-        )
-        st.altair_chart(chart, use_container_width=True)
-    else:
-        st.info("Select at least one output to plot.")
-
-    with st.expander("Show sensitivity table (first 200 rows)"):
-        st.dataframe(sens_df.head(200), use_container_width=True)
 
 # -------------------- Tab: Sensitivity — CO₂ Utilization (Gas Only) --------------------
 with tab_s2:
