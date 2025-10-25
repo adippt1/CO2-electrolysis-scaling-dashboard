@@ -315,6 +315,9 @@ with tab_instructions:
             - Gas and liquid product rates  
             - CO₂ utilization (%)  
             - Power and total current
+            P.S. Stoich is the Stoichiometry. It is the ratio of actual CO₂ fed to the theoretical minimum CO₂ required to produce the observed products.
+                • S = 1 means 100% CO₂ utilization (no excess feed).
+                • S > 1 means excess CO₂ feed and lower utilization (e.g., S = 2 → 50% utilization).
          
         
         - **Calc: Area from Inlet & Stoich:**  
