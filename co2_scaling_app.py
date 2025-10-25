@@ -379,7 +379,10 @@ with tab_instructions:
     st.markdown("""
     1. [Nitopi, Stephanie, et al. "Progress and perspectives of electrochemical CO2 reduction on copper in aqueous electrolyte." 
     Chemical reviews 119.12 (2019): 7610-7672.](https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705)
+    2. [Perry, John H. "Chemical engineers' handbook." (1950): 533.](https://pubs.acs.org/doi/pdf/10.1021/ed027p533.1): 
+    Link is just an exerpt but a good starting point for one to go out in the wild to find this book.
     """)
+    
 
 # -------------------- Tab: Calculator (Area/j with S or Inlet) --------------------
 with tab_calc:
