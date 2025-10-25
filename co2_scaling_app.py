@@ -345,7 +345,7 @@ with tab_instructions:
         - You can download any result table via the “Download CSV” buttons.  
         - Hover over plots for tooltips showing precise data points.  
         - Adjust **molar volume basis (STP/SATP)** in the sidebar to update gas volumetric conversions.
-        - If you find any mistakes please feel free to reach out!
+        - If you find any mistakes please feel free to [reach out]((https://people.llnl.gov/prajapati3))!
     
         ---
         """)
