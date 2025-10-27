@@ -106,7 +106,7 @@ def sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
 # -------------------- Product properties  --------------------
 
 # MGO is the only E0 I calculated digging data through the internet. 
-#Rest of the E0 are from this excellent review article: https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705
+# Rest of the E0 are from this excellent review article: https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705
 PRODUCTS: List[Dict] = [
     # Gases
     {"Product": "CO",         "Phase": "gas",    "MW (g/mol)": 28.010, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 10.1,  "HHV (MJ/kg)": 12.6, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.33},
@@ -352,15 +352,15 @@ with tab_instructions:
 
     st.subheader("Constants & Properties")
     st.markdown(f"""
-- **Faraday constant (F):** `{F:.5f}` C·mol⁻¹ e⁻  
-- **Molar volume bases:**  
-  • STP = `{MV_OPTIONS['STP (0°C, 1 atm) — 22.414 L/mol']:.3f}` L·mol⁻¹  
-  • SATP = `{MV_OPTIONS['SATP (25°C, 1 atm) — 24.465 L/mol']:.3f}` L·mol⁻¹  
-- **Current basis:** `{basis_label}`  
-- **Stacking:** `{'ON' if use_stack_global else 'OFF'}` — Units: `{n_units_global}`  
-- **Gas products:** {", ".join(GASES) if GASES else "None"}  
-- **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
-""")
+    - **Faraday constant (F):** `{F:.5f}` C·mol⁻¹ e⁻  
+    - **Molar volume bases:**  
+      • STP = `{MV_OPTIONS['STP (0°C, 1 atm) — 22.414 L/mol']:.3f}` L·mol⁻¹  
+      • SATP = `{MV_OPTIONS['SATP (25°C, 1 atm) — 24.465 L/mol']:.3f}` L·mol⁻¹  
+    - **Current basis:** `{basis_label}`  
+    - **Stacking:** `{'ON' if use_stack_global else 'OFF'}` — Units: `{n_units_global}`  
+    - **Gas products:** {", ".join(GASES) if GASES else "None"}  
+    - **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
+    """)
 
     # Display name overrides for constants view
     def display_name(prod_key: str) -> str:
@@ -427,14 +427,13 @@ with tab_instructions:
     st.subheader("References")
     st.markdown("""
     1. [Nitopi, Stephanie, et al. "Progress and perspectives of electrochemical CO2 reduction on copper in aqueous electrolyte." 
-    Chemical reviews 119.12 (2019): 7610-7672.](https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705)
+    Chemical Reviews 119.12 (2019): 7610-7672.](https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705)
     
-    2. [Perry, John H. "Chemical engineers' handbook." (1950): 533.](https://pubs.acs.org/doi/pdf/10.1021/ed027p533.1): 
-    Link is just an exerpt but a good starting point for one to go out in the wild to find this book.
-
-    3. [Data, C. P. T. NIST Chemistry WebBook, NIST Standard Reference Database Number 69, 2005.](https://webbook.nist.gov/chemistry/)
+    2. [Perry, John H. "Chemical engineers' handbook." (1950): 533.](https://pubs.acs.org/doi/pdf/10.1021/ed027p533.1) — 
+    excerpt link as a pointer to the classic reference.
+    
+    3. [NIST Chemistry WebBook, SRD 69.](https://webbook.nist.gov/chemistry/)
     """)
-    
 
 # -------------------- Tab: Calculator (Area/j with S or Inlet) --------------------
 with tab_calc:
