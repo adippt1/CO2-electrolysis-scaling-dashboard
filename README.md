@@ -1,4 +1,4 @@
-# 🧀 CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator
+# 🧀 CHEESE — CO₂ Handling & Electrolyzer Efficiency Scaling Evaluator
 
 **Tagline:** Because scaling electrolysis shouldn’t be this gouda! 🧀
 
