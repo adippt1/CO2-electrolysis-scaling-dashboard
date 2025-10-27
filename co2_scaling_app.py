@@ -1,4 +1,4 @@
-# CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator
+# CHEESE — CO₂ Handling & Electrolyzer Efficiency Scaling Evaluator
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
 # Author: Aditya Prajapati + ChatGPT (GPT-5 Thinking)
 # Copyright (c) 2025 Aditya Prajapati
@@ -12,12 +12,12 @@ import streamlit as st
 
 # -------------------- Page setup --------------------
 st.set_page_config(
-    page_title="CHEESE — CO₂ Handling & Electrolysis",
+    page_title="CHEESE — CO₂ Handling for scaling",
     page_icon="🧀",
     layout="wide",
 )
 
-st.title("🧀 CHEESE — CO₂ Handling & Electrolysis Efficiency Scaling Evaluator")
+st.title("🧀 CHEESE — CO₂ Handling & Electrolyzer Efficiency Scaling Evaluator")
 st.caption("Because scaling electrolysis shouldn’t be this gouda!")
 
 st.markdown(
