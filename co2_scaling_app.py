@@ -1,7 +1,7 @@
 # CHEESE — CO₂ Handling & Electrolyzer Efficiency Scaling Evaluator
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
 # Author: Aditya Prajapati + ChatGPT (GPT-5 Thinking)
-# © 2025 Aditya Prajapati
+# Copyright (c) 2025 Aditya Prajapati
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -36,7 +36,7 @@ with st.sidebar:
         """
         ---
         **Created by**  
-        **Aditya Prajapati (Adi)**
+        **[Aditya Prajapati (Adi)](https://people.llnl.gov/prajapati3)**
         ---
         """,
         unsafe_allow_html=True
@@ -53,25 +53,24 @@ MV_OPTIONS = {
     "SATP (25°C, 1 atm) — 24.465 L/mol": 24.465,
 }
 
-# -------------------- Product properties --------------------
-PRODUCTS: List[Dict] = [
-    # Gases
-    {"Product": "CO",         "Phase": "gas",    "MW (g/mol)": 28.010, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 10.1,  "HHV (MJ/kg)": 12.6, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.33},
-    {"Product": "H₂",         "Phase": "gas",    "MW (g/mol)": 2.016,  "nₑ⁻ to product": 2,  "co2_per_mol": 0.0, "LHV (MJ/kg)": 120.0, "HHV (MJ/kg)": 141.9,"ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.23},
-    {"Product": "CH₄",        "Phase": "gas",    "MW (g/mol)": 16.043, "nₑ⁻ to product": 8,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 50.0,  "HHV (MJ/kg)": 55.5, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.06},
-    {"Product": "C₂H₄",       "Phase": "gas",    "MW (g/mol)": 28.054, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 47.2,  "HHV (MJ/kg)": 51.9, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.15},
-    # Liquids (at ~25 °C)
-    {"Product": "Methanol",   "Phase": "liquid", "MW (g/mol)": 32.042, "nₑ⁻ to product": 6,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 19.9,  "HHV (MJ/kg)": 22.7, "ρ_liq (kg/L)": 0.791, "E0 (V) [display]": 1.20},
-    {"Product": "Ethanol",    "Phase": "liquid", "MW (g/mol)": 46.069, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 26.8,  "HHV (MJ/kg)": 29.7, "ρ_liq (kg/L)": 0.789, "E0 (V) [display]": 1.14},
-    {"Product": "Formate",    "Phase": "liquid", "MW (g/mol)": 46.026, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 5.9,   "HHV (MJ/kg)": 6.3,  "ρ_liq (kg/L)": 1.220, "E0 (V) [display]": 1.35},
-    {"Product": "MGO",        "Phase": "liquid", "MW (g/mol)": 72.060, "nₑ⁻ to product": 12, "co2_per_mol": 3.0, "LHV (MJ/kg)": np.nan,"HHV (MJ/kg)": np.nan,"ρ_liq (kg/L)": 1.050, "E0 (V) [display]": 1.25},
-]
-PRODUCT_LIST = [p["Product"] for p in PRODUCTS]
-GASES   = [p["Product"] for p in PRODUCTS if p["Phase"].lower() == "gas"]
-LIQUIDS = [p["Product"] for p in PRODUCTS if p["Phase"].lower() == "liquid"]
-PRODUCT_MAP = {p["Product"]: p for p in PRODUCTS}
+# -------------------- Sidebar controls (global) --------------------
+st.sidebar.header("Global Settings")
 
-# -------------------- Numeric cleaning (constants table display) --------------------
+basis_label = st.sidebar.selectbox(
+    "Gas molar volume basis",
+    options=list(MV_OPTIONS.keys()),
+    index=0,
+    key="global_basis",
+    help="Used to compute gas molar flows from SLPM and gas densities from MW.",
+)
+
+mv_L_per_mol = MV_OPTIONS[basis_label]  # L/mol
+mv_m3_per_mol = mv_L_per_mol / 1000.0  # m³/mol
+
+use_stack_global = st.sidebar.checkbox("Use a stack (multiple identical units)?", value=True, key="gs_stack")
+n_units_global = st.sidebar.number_input("Number of units in stack", min_value=1, value=10, step=1, key="gs_units")
+
+# -------------------- Helper: numeric sanitizer  --------------------
 NUMERIC_COLS = {
     "MW (g/mol)",
     "nₑ⁻ to product",
@@ -80,7 +79,16 @@ NUMERIC_COLS = {
     "ρ_liq (kg/L)",
     "E0 (V) [display]",
 }
-CLEAN_NULLS = {r"^\s*$": np.nan, "—": np.nan, "–": np.nan, "NA": np.nan, "N/A": np.nan, "n/a": np.nan}
+
+CLEAN_NULLS = {
+    r"^\s*$": np.nan,
+    "—": np.nan,
+    "–": np.nan,
+    "NA": np.nan,
+    "N/A": np.nan,
+    "n/a": np.nan,
+}
+
 def sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     for c in df.columns:
@@ -95,33 +103,63 @@ def sanitize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
             out[c] = pd.to_numeric(series, errors="coerce").astype(float)
     return out
 
-# -------------------- Units & conversions --------------------
+# -------------------- Product properties  --------------------
+
+# MGO is the only E0 I calculated digging data through the internet. 
+#Rest of the E0 are from this excellent review article: https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705
+PRODUCTS: List[Dict] = [
+    # Gases
+    {"Product": "CO",         "Phase": "gas",    "MW (g/mol)": 28.010, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 10.1,  "HHV (MJ/kg)": 12.6, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.33},
+    {"Product": "H₂",         "Phase": "gas",    "MW (g/mol)": 2.016,  "nₑ⁻ to product": 2,  "co2_per_mol": 0.0, "LHV (MJ/kg)": 120.0, "HHV (MJ/kg)": 141.9,"ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.23},
+    {"Product": "CH₄",        "Phase": "gas",    "MW (g/mol)": 16.043, "nₑ⁻ to product": 8,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 50.0,  "HHV (MJ/kg)": 55.5, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.06},
+    {"Product": "C₂H₄",       "Phase": "gas",    "MW (g/mol)": 28.054, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 47.2,  "HHV (MJ/kg)": 51.9, "ρ_liq (kg/L)": np.nan, "E0 (V) [display]": 1.15},
+    # Liquids (at ~25 °C)
+    {"Product": "Methanol",   "Phase": "liquid", "MW (g/mol)": 32.042, "nₑ⁻ to product": 6,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 19.9,  "HHV (MJ/kg)": 22.7, "ρ_liq (kg/L)": 0.791, "E0 (V) [display]": 1.20},
+    {"Product": "Ethanol",    "Phase": "liquid", "MW (g/mol)": 46.069, "nₑ⁻ to product": 12, "co2_per_mol": 2.0, "LHV (MJ/kg)": 26.8,  "HHV (MJ/kg)": 29.7, "ρ_liq (kg/L)": 0.789, "E0 (V) [display]": 1.14},
+    {"Product": "Formate",    "Phase": "liquid", "MW (g/mol)": 46.026, "nₑ⁻ to product": 2,  "co2_per_mol": 1.0, "LHV (MJ/kg)": 5.9,   "HHV (MJ/kg)": 6.3,  "ρ_liq (kg/L)": 1.220, "E0 (V) [display]": 1.35},
+    {"Product": "MGO",        "Phase": "liquid", "MW (g/mol)": 72.060, "nₑ⁻ to product": 12, "co2_per_mol": 3.0, "LHV (MJ/kg)": np.nan,"HHV (MJ/kg)": np.nan,"ρ_liq (kg/L)": 1.050, "E0 (V) [display]": 1.25},
+]
+
+PRODUCT_LIST = [p["Product"] for p in PRODUCTS]
+GASES = [p["Product"] for p in PRODUCTS if p["Phase"].lower() == "gas"]
+LIQUIDS = [p["Product"] for p in PRODUCTS if p["Phase"].lower() == "liquid"]
+PRODUCT_MAP = {p["Product"]: p for p in PRODUCTS}
+
+# -------------------- Utility helpers --------------------
 def to_m2(area_value: float, area_unit: str) -> float:
     return area_value * 1e-4 if area_unit == "cm²" else area_value
+
 def to_A_per_m2(j_value: float, j_unit: str) -> float:
     if j_unit == "mA/cm²": return j_value * 10.0
     if j_unit == "A/cm²":  return j_value * 1e4
     return j_value
+
 def fe_to_frac(fe_pct: float) -> float:
     return max(0.0, min(1.0, (fe_pct or 0.0) / 100.0))
+
 def amps(area_m2: float, j_A_m2: float) -> float:
     return area_m2 * j_A_m2
+
 def prod_mol_s(I: float, fe_frac: float, ne_per_mol: int) -> float:
     return (I * fe_frac) / (max(ne_per_mol, EPS) * F)
+
 def mol_s_to_slpm(n_dot: float, molar_volume_L: float) -> float:
     return n_dot * molar_volume_L * 60.0
+
 def slpm_to_mol_s(flow_slpm: float, molar_volume_L: float) -> float:
     return flow_slpm / (molar_volume_L * 60.0 if molar_volume_L > 0 else np.inf)
+
 def mflow_to_mass_and_vol(n_mol_s: float, MW_g_mol: float, rho_liq_kg_L: Optional[float]) -> Tuple[float, Optional[float]]:
     kg_h = n_mol_s * MW_g_mol * 3600.0 / 1000.0
     if rho_liq_kg_L is None or rho_liq_kg_L <= 0:
         return kg_h, None
     L_h = kg_h / rho_liq_kg_L
     return kg_h, L_h
+
 def total_power_watts(I: float, V: float, n_units: int) -> float:
     return I * V * max(1, n_units)
 
-# -------------------- FE UI helper --------------------
+# ---------- UI helpers for clean FE alignment ----------
 def fe_grid_inputs(
     section_key: str,
     products: List[str],
@@ -150,45 +188,7 @@ def fe_grid_inputs(
         st.markdown("</div>", unsafe_allow_html=True)
     return fe_map
 
-# -------------------- GLOBAL FE (single source of truth) --------------------
-def init_global_fe(defaults: Optional[Dict[str, float]] = None):
-    if "fe_global" not in st.session_state:
-        base = {p: (90.0 if p == "CO" else 0.0) for p in PRODUCT_LIST}
-        if defaults:
-            base.update({k: float(defaults.get(k, base[k])) for k in PRODUCT_LIST})
-        st.session_state["fe_global"] = base
-
-def get_global_fe() -> Dict[str, float]:
-    return dict(st.session_state.get("fe_global", {}))
-
-def set_global_fe(new_map: Dict[str, float]):
-    st.session_state["fe_global"] = {p: float(new_map.get(p, 0.0)) for p in PRODUCT_LIST}
-
-# -------------------- Sidebar controls (global) --------------------
-init_global_fe()
-
-st.sidebar.header("Global Settings")
-basis_label = st.sidebar.selectbox(
-    "Gas molar volume basis",
-    options=list(MV_OPTIONS.keys()),
-    index=0,
-    key="global_basis",
-    help="Used to compute gas molar flows from SLPM and gas densities from MW.",
-)
-mv_L_per_mol = MV_OPTIONS[basis_label]     # L/mol
-mv_m3_per_mol = mv_L_per_mol / 1000.0      # m³/mol
-
-use_stack_global = st.sidebar.checkbox("Use a stack (multiple identical units)?", value=True, key="gs_stack")
-n_units_global = st.sidebar.number_input("Number of units in stack", min_value=1, value=10, step=1, key="gs_units")
-
-with st.sidebar.expander("Global FE (applies to all tabs)", expanded=False):
-    current_global = get_global_fe()
-    edited = fe_grid_inputs("global", PRODUCT_LIST, default_map=current_global, title="Faradaic Efficiencies (%)", per_row=3)
-    if edited != current_global:
-        set_global_fe(edited)
-        st.success("FE updated globally.")
-
-# -------------------- Core calculators --------------------
+# -------------------- Core calculators (multi-product, gas vs liquid) --------------------
 @dataclass
 class ElectrolyzerInputs:
     area_value: float
@@ -308,31 +308,65 @@ with tab_instructions:
         **Purpose:**  
         This dashboard helps estimate CO₂ electrolyzer scaling parameters, product outputs, and sensitivities.
         - Gas products: H₂, CO, CH₄, C₂H₄
-        - Liquid products: Methanol, Ethanol, Formate, Methylglyoxal (MGO)
+        - Liquid products, Methanol, Ethanol, Formate, Methylglyoxal (MGO)
     
         **Tabs Overview:**
-        - **Calculator:** Input area, current density, voltage, and use **Global FE** (sidebar).  
-        - **Calc: Area from Inlet & Stoich:** Sizes required electrode area from CO₂ inlet and S.  
-        - **Sensitivity: CO₂ Utilization:** Sweeps utilization to show gas outlet flows & composition.  
-        - **Sensitivity: Area × Stack / CO₂ Cap:** Trade-offs of area vs units; quick CO₂ cap check.
-
-        **Definition — Stoichiometry (S):**  
-        Ratio of actual CO₂ feed to theoretical minimum CO₂ required for the observed products.  
-        • S = 1 → 100% utilization.  
-        • S > 1 → excess CO₂, lower utilization (e.g., S = 2 → 50%).
+        - **Calculator:**  
+          Input area, current density, cell voltage, and Faradaic efficiencies (FEs).  
+          Choose between `Stoich (S)` or `Inlet Flow` modes to compute:
+            - Gas and liquid product rates  
+            - CO₂ utilization (%)  
+            - Power and total current
+            
+        Stoich is the "Stoichiometry". It is the ratio of actual CO₂ fed to the theoretical minimum CO₂ required to produce the observed products.
+               
+                • S = 1 means 100% CO₂ utilization (no excess feed).
+               
+                • S > 1 means excess CO₂ feed and lower utilization (e.g., S = 2 → 50% utilization).
+         
+        
+        - **Calc: Area from Inlet & Stoich:**  
+          Provides the **required electrode area** per unit and total area for a given CO₂ inlet and stoichiometric ratio (S).  
+          Includes per-product outputs (gas SLPM, liquid kg/h, etc.).
+    
+        - **Sensitivity: CO₂ Utilization:**  
+          Sweeps utilization (%) to show gas outlet composition and flowrate trends.
+    
+        - **Sensitivity: Area × Stack:**  
+          Visualizes scaling trade-offs between cell area and number of units in the stack using a heatmap.
+    
+        - **Sensitivity: CO₂ Supply Cap:**  
+          Determines the maximum achievable utilization given a CO₂ feed limitation.
+    
+        - **Constants & Reference (this tab):**  
+          Lists all physical constants, product properties, and data sources.
+    
+        💡**Tips:**  
+        - You can download any result table via the “Download CSV” buttons.  
+        - Hover over plots for tooltips showing precise data points.  
+        - Adjust **molar volume basis (STP/SATP)** in the sidebar to update gas volumetric conversions.
+        - If you find any mistakes please feel free to [reach out](https://people.llnl.gov/prajapati3)!
+    
+        ---
         """)
 
     st.subheader("Constants & Properties")
     st.markdown(f"""
-    - **Faraday constant (F):** `{F:.5f}` C·mol⁻¹ e⁻  
-    - **Molar volume bases:**  
-      • STP = `{MV_OPTIONS['STP (0°C, 1 atm) — 22.414 L/mol']:.3f}` L·mol⁻¹  
-      • SATP = `{MV_OPTIONS['SATP (25°C, 1 atm) — 24.465 L/mol']:.3f}` L·mol⁻¹  
-    - **Current basis:** `{basis_label}`  
-    - **Stacking:** `{'ON' if use_stack_global else 'OFF'}` — Units: `{n_units_global}`  
-    - **Gas products:** {", ".join(GASES) if GASES else "None"}  
-    - **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
-    """)
+- **Faraday constant (F):** `{F:.5f}` C·mol⁻¹ e⁻  
+- **Molar volume bases:**  
+  • STP = `{MV_OPTIONS['STP (0°C, 1 atm) — 22.414 L/mol']:.3f}` L·mol⁻¹  
+  • SATP = `{MV_OPTIONS['SATP (25°C, 1 atm) — 24.465 L/mol']:.3f}` L·mol⁻¹  
+- **Current basis:** `{basis_label}`  
+- **Stacking:** `{'ON' if use_stack_global else 'OFF'}` — Units: `{n_units_global}`  
+- **Gas products:** {", ".join(GASES) if GASES else "None"}  
+- **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
+""")
+
+    # Display name overrides for constants view
+    def display_name(prod_key: str) -> str:
+        if prod_key == "MGO":
+            return "Methylglyoxal (MGO)"
+        return prod_key
 
     c1, c2 = st.columns(2)
     with c1:
@@ -356,11 +390,14 @@ with tab_instructions:
     mw_kg_per_mol = products_df["MW (g/mol)"] / 1000.0
     rho_gas_si = (mw_kg_per_mol / mv_m3_per_mol).where(products_df["Phase"].str.lower().eq("gas"), np.nan)
 
+    # Build display dataframe with name override and units
     display_df = products_df[[
         "Product","Phase","MW (g/mol)","nₑ⁻ to product","co2_per_mol","LHV (MJ/kg)","HHV (MJ/kg)","E0 (V) [display]"
     ]].copy()
-    display_df.insert(0, "Name", display_df["Product"].apply(lambda s: "Methylglyoxal (MGO)" if s=="MGO" else s))
+    display_df.insert(0, "Name", display_df["Product"].apply(display_name))
     display_df.drop(columns=["Product"], inplace=True)
+
+    # Add densities with chosen units (1 kg/m³ = 1 g/L; 1 kg/L = 1 g/mL)
     display_df[f"ρ (gas @ {basis_label.split('—')[0].strip()}) [{gas_density_unit}]"] = rho_gas_si
     display_df[f"ρ (liquid) [{liq_density_unit}]"] = products_df["ρ_liq (kg/L)"]
 
@@ -389,14 +426,20 @@ with tab_instructions:
     st.markdown("---")
     st.subheader("References")
     st.markdown("""
-    1. Nitopi, S., et al., **Chem. Rev.** 2019, 119, 7610–7672.  
-    2. NIST Chemistry WebBook, SRD 69.
+    1. [Nitopi, Stephanie, et al. "Progress and perspectives of electrochemical CO2 reduction on copper in aqueous electrolyte." 
+    Chemical reviews 119.12 (2019): 7610-7672.](https://pubs.acs.org/doi/full/10.1021/acs.chemrev.8b00705)
+    
+    2. [Perry, John H. "Chemical engineers' handbook." (1950): 533.](https://pubs.acs.org/doi/pdf/10.1021/ed027p533.1): 
+    Link is just an exerpt but a good starting point for one to go out in the wild to find this book.
+
+    3. [Data, C. P. T. NIST Chemistry WebBook, NIST Standard Reference Database Number 69, 2005.](https://webbook.nist.gov/chemistry/)
     """)
+    
 
 # -------------------- Tab: Calculator (Area/j with S or Inlet) --------------------
 with tab_calc:
-    st.subheader("Calculator: Provide Area, j, Global FE; choose Stoich S or Inlet")
-    st.caption("FE is synced from the **Global FE** editor in the sidebar.")
+    st.subheader("Calculator: Provide Area, j, FE; choose Stoich S or Inlet")
+    st.caption("Multi-product, true gas vs liquid handling. Shows per-product outputs.")
 
     colA, colB, colC = st.columns(3)
     with colA:
@@ -408,8 +451,7 @@ with tab_calc:
     with colC:
         V_cell  = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="calc_V")
 
-    fe_map_pct: Dict[str, float] = get_global_fe()
-    st.caption("Using **Global FE**.")
+    fe_map_pct: Dict[str, float] = fe_grid_inputs("calc", PRODUCT_LIST, title="FE split (%)")
 
     st.divider()
     mode = st.radio("CO₂ feed input mode", ["Stoich (S)", "Inlet flow (SLPM)"], index=0, horizontal=True, key="calc_mode")
@@ -494,7 +536,6 @@ with tab_calc:
 # -------------------- Tab: Calc — Size Active Area from CO₂ Inlet & Stoich --------------------
 with tab_size:
     st.subheader("Calc: Size Active Area from CO₂ Inlet & Stoich (with per-product outputs)")
-    st.caption("FE is synced from the **Global FE** editor in the sidebar.")
 
     units_used = n_units_global if use_stack_global else 1
     col1, col2, col3 = st.columns(3)
@@ -506,9 +547,7 @@ with tab_size:
         j_unit_sz = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="sz_j_unit")
         V_cell_sz = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="sz_V")
     with col3:
-        st.write("Faradaic Efficiency split")
-        st.caption("Using **Global FE**.")
-        fe_map_sz = get_global_fe()
+        fe_map_sz = fe_grid_inputs("sz", PRODUCT_LIST, title="FE split (%)", per_row=3)
 
     j_A_m2_sz = to_A_per_m2(j_val_sz, j_unit_sz)
     co2_min_slpm_sz = co2_in_slpm_sz / max(S_sz, EPS)
@@ -581,7 +620,6 @@ with tab_size:
 # -------------------- Tab: Sensitivity — CO₂ Utilization (Gas Only) --------------------
 with tab_s2:
     st.subheader("Sensitivity: CO₂ Utilization (Gas flows & composition only)")
-    st.caption("FE is synced from the **Global FE** editor in the sidebar.")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -589,12 +627,11 @@ with tab_s2:
         j_u    = st.number_input("Current density (mA/cm²)", min_value=0.0, value=200.0, step=10.0, key="u_j")
         V_u    = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="u_V")
     with col2:
+        fe_map_u = fe_grid_inputs("u", PRODUCT_LIST, title="FE split (%)", per_row=3)
         units_u = n_units_global if use_stack_global else 1
         st.info(f"Using global stack setting: {units_u} unit(s).")
     with col3:
         st.write(f"**Gas basis:** {mv_L_per_mol:.3f} L/mol")
-
-    fe_map_u = get_global_fe()
 
     Umin = st.number_input("Utilization min (%)", min_value=1.0, value=20.0, step=1.0, key="u_min")
     Umax = st.number_input("Utilization max (%)", min_value=1.0, value=100.0, step=1.0, key="u_max")
@@ -643,7 +680,6 @@ with tab_s2:
 # -------------------- Tab: Sensitivity — Area × Stack / CO₂ Cap --------------------
 with tab_s3:
     st.subheader("Sensitivity: Area × Stack (gas SLPM + liquid kg/h) + CO₂ Cap")
-    st.caption("FE is synced from the **Global FE** editor in the sidebar.")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -651,6 +687,7 @@ with tab_s3:
         j_unit1  = st.selectbox("j units", ["mA/cm²","A/cm²","A/m²"], index=0, key="axs_j_unit")
         V_cell1  = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="axs_V")
     with col2:
+        fe_map1 = fe_grid_inputs("axs", PRODUCT_LIST, title="FE split (%)", per_row=3)
         S1 = st.number_input("Stoich S for sweep", min_value=1.0, value=2.0, step=0.1, key="axs_S")
     with col3:
         area_min = st.number_input("Area per unit - min (cm²)", min_value=0.0, value=25.0, step=5.0, key="axs_area_min")
@@ -659,8 +696,6 @@ with tab_s3:
         n_min = st.number_input("# Units - min", min_value=1, value=1, step=1, key="axs_n_min")
         n_max = st.number_input("# Units - max", min_value=1, value=50, step=1, key="axs_n_max")
         n_step = st.number_input("# Units step", min_value=1, value=5, step=1, key="axs_n_step")
-
-    fe_map1 = get_global_fe()
 
     area_vals_cm2 = np.arange(area_min, area_max + 1e-9, area_step)
     n_vals = np.arange(n_min, n_max + 1, n_step)
