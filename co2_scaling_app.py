@@ -2,12 +2,14 @@
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
 # Author: Aditya Prajapati + ChatGPT (GPT-5 Thinking)
 # Copyright (c) 2025 Aditya Prajapati
+# Dependencies: streamlit, numpy, pandas, altair, plotly
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import altair as alt
+import plotly.graph_objects as go
 import streamlit as st
 
 # -------------------- Page setup --------------------
@@ -44,6 +46,8 @@ with st.sidebar:
 
 # -------------------- Constants --------------------
 F = 96485.33212  # C/mol e-
+R = 8.314462618  # J/(mol·K)
+MW_CO2_G_MOL = 44.0095
 SECONDS_PER_MIN = 60.0
 EPS = 1e-12
 
@@ -85,7 +89,7 @@ GAS_FLOW_SCALE = 1000.0 if GAS_FLOW_UNIT == "SCCM" else 1.0
 _previous_unit = st.session_state["_previous_gas_flow_unit"]
 if GAS_FLOW_UNIT != _previous_unit:
     _unit_conversion = 1000.0 if GAS_FLOW_UNIT == "SCCM" else 1.0 / 1000.0
-    for _flow_widget_key in ("calc_inlet", "sz_inlet", "cap_cap"):
+    for _flow_widget_key in ("calc_inlet", "cb_inlet", "sz_inlet", "cap_cap"):
         if _flow_widget_key in st.session_state:
             st.session_state[_flow_widget_key] = float(st.session_state[_flow_widget_key]) * _unit_conversion
 
@@ -100,6 +104,43 @@ if GAS_FLOW_UNIT != _previous_unit:
 
 use_stack_global = st.sidebar.checkbox("Use a stack (multiple identical units)?", value=True, key="gs_stack")
 n_units_global = st.sidebar.number_input("Number of units in stack", min_value=1, value=10, step=1, key="gs_units")
+
+# Real gas settings are global because the same test conditions usually apply
+# across sizing, carbon-balance, and sensitivity calculations. Standard-flow
+# calculations remain on the selected STP/SATP basis.
+with st.sidebar.expander("Real gas conditions (optional)", expanded=False):
+    gas_temperature_C = st.number_input(
+        "Gas temperature (°C)",
+        min_value=-20.0, max_value=150.0, value=25.0, step=1.0,
+        key="gs_gas_temperature_C",
+        help="Used only to translate standard dry flow into actual wet volumetric flow.",
+    )
+    gas_relative_humidity_pct = st.number_input(
+        "Relative humidity (%)",
+        min_value=0.0, max_value=100.0, value=0.0, step=5.0,
+        key="gs_gas_rh_pct",
+    )
+    gas_outlet_pressure_bar_abs = st.number_input(
+        "Gas outlet pressure (bar absolute)",
+        min_value=0.05, value=1.01325, step=0.05,
+        key="gs_gas_outlet_p_bar_abs",
+        help="Use absolute pressure, not gauge pressure.",
+    )
+    gas_pressure_drop_bar = st.number_input(
+        "Measured gas ΔP: inlet − outlet (bar)",
+        min_value=0.0, value=0.0, step=0.01,
+        key="gs_gas_dp_bar",
+        help="This is the pressure drop measured across the gas flow path. Inlet absolute pressure = outlet absolute pressure + ΔP.",
+    )
+    liquid_pressure_drop_bar = st.number_input(
+        "Liquid-side ΔP (bar, optional reference)",
+        min_value=0.0, value=0.0, step=0.01,
+        key="gs_liquid_dp_bar",
+        help="Recorded as a hydraulic reference. It is not treated as membrane differential pressure or pumping power without absolute pressures and liquid flowrate.",
+    )
+    st.caption("SLPM/SCCM remain standard dry-flow units. These settings add an actual wet-flow interpretation without changing the electrochemical material balance.")
+
+gas_inlet_pressure_bar_abs = gas_outlet_pressure_bar_abs + gas_pressure_drop_bar
 
 # -------------------- Helper: numeric sanitizer  --------------------
 NUMERIC_COLS = {
@@ -207,6 +248,110 @@ def gas_flow_number_input(
         step=slpm_to_display(step_slpm),
         key=key,
     )
+
+def water_vapor_pressure_kpa(temperature_C: float) -> float:
+    """Approximate saturation vapor pressure of water from −20 to 150 °C."""
+    T = min(150.0, max(-20.0, float(temperature_C)))
+    if T < 1.0:
+        # Buck-type expression, suitable for sub-ambient temperatures.
+        return 0.61115 * np.exp((23.036 - T / 333.7) * T / (279.82 + T))
+    if T <= 99.0:
+        A, B, C = 8.07131, 1730.63, 233.426
+    else:
+        A, B, C = 8.14019, 1810.94, 244.485
+    p_mmHg = 10 ** (A - B / (C + T))
+    return p_mmHg * 0.133322368
+
+def standard_dry_to_actual_wet_lpm(
+    flow_slpm: float,
+    temperature_C: float,
+    pressure_bar_abs: float,
+    relative_humidity_pct: float,
+) -> Tuple[float, float, Optional[str]]:
+    """Convert standard dry-gas flow to actual wet L/min at T, P, and RH.
+
+    Returns (actual wet L/min, water vapor vol%, optional warning).
+    """
+    if flow_slpm <= EPS:
+        return 0.0, 0.0, None
+
+    T_K = float(temperature_C) + 273.15
+    P_total_Pa = max(float(pressure_bar_abs), EPS) * 1e5
+    p_sat_kPa = water_vapor_pressure_kpa(temperature_C)
+    p_h2o_Pa = max(0.0, min(1.0, relative_humidity_pct / 100.0)) * p_sat_kPa * 1000.0
+
+    warning = None
+    if p_h2o_Pa >= 0.95 * P_total_Pa:
+        p_h2o_Pa = 0.95 * P_total_Pa
+        warning = "Water-vapor pressure approached total pressure; RH contribution was capped for numerical stability."
+
+    P_dry_Pa = max(P_total_Pa - p_h2o_Pa, EPS)
+    n_dry_mol_s = slpm_to_mol_s(flow_slpm, mv_L_per_mol)
+    actual_m3_s = n_dry_mol_s * R * T_K / P_dry_Pa
+    actual_L_min = actual_m3_s * 1000.0 * 60.0
+    water_vol_pct = 100.0 * p_h2o_Pa / P_total_Pa
+    return actual_L_min, water_vol_pct, warning
+
+def product_specific_energy_rows(
+    core: Dict[str, float],
+    fe_map_pct: Dict[str, float],
+    V_cell: float,
+) -> pd.DataFrame:
+    """Build product-level production and electrical-energy metrics."""
+    I_total = core.get("I_total_A", 0.0)
+    power_W = I_total * V_cell
+    rows = []
+
+    for p in PRODUCT_LIST:
+        fe_frac = fe_to_frac(fe_map_pct.get(p, 0.0))
+        if fe_frac <= EPS:
+            continue
+
+        props = PRODUCT_MAP[p]
+        n_e = props["nₑ⁻ to product"]
+        MW_kg_mol = props["MW (g/mol)"] / 1000.0
+        n_p = core.get(f"{p}_mol_s", 0.0)
+        mass_kg_h = n_p * MW_kg_mol * 3600.0
+
+        sec_kWh_kg = (
+            n_e * F * V_cell / (fe_frac * MW_kg_mol * 3.6e6)
+            if MW_kg_mol > EPS else np.nan
+        )
+        thermo_eff_pct = (
+            100.0 * fe_frac * props["E0 (V) [display]"] / V_cell
+            if V_cell > EPS and pd.notna(props["E0 (V) [display]"]) else np.nan
+        )
+
+        lhv = props["LHV (MJ/kg)"]
+        hhv = props["HHV (MJ/kg)"]
+        mass_kg_s = mass_kg_h / 3600.0
+        lhv_contribution = (100.0 * mass_kg_s * lhv * 1e6 / power_W) if power_W > EPS and pd.notna(lhv) else np.nan
+        hhv_contribution = (100.0 * mass_kg_s * hhv * 1e6 / power_W) if power_W > EPS and pd.notna(hhv) else np.nan
+
+        rows.append({
+            "Product": p,
+            "FE (%)": 100.0 * fe_frac,
+            "Production (kg/h)": mass_kg_h,
+            "Specific electricity (kWh/kg)": sec_kWh_kg,
+            "Thermodynamic efficiency contribution (%)": thermo_eff_pct,
+            "LHV efficiency contribution (%)": lhv_contribution,
+            "HHV efficiency contribution (%)": hhv_contribution,
+        })
+
+    return pd.DataFrame(rows)
+
+def first_positive_minimum(candidates: Dict[str, float]) -> Tuple[str, float]:
+    valid = {k: v for k, v in candidates.items() if np.isfinite(v) and v > EPS}
+    if not valid:
+        return "No active replacement trigger", np.inf
+    trigger = min(valid, key=valid.get)
+    return trigger, valid[trigger]
+
+def trapezoid_integral(y: np.ndarray, x: np.ndarray) -> float:
+    """NumPy-version-compatible trapezoidal integration."""
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
 
 def mflow_to_mass_and_vol(n_mol_s: float, MW_g_mol: float, rho_liq_kg_L: Optional[float]) -> Tuple[float, Optional[float]]:
     kg_h = n_mol_s * MW_g_mol * 3600.0 / 1000.0
@@ -350,12 +495,14 @@ def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct:
     return pd.DataFrame(rows)
 
 # -------------------- Tabs --------------------
-tab_instructions, tab_calc, tab_size, tab_s2, tab_s3 = st.tabs([
+tab_instructions, tab_calc, tab_carbon, tab_size, tab_s2, tab_s3, tab_durability = st.tabs([
     "Instructions",
     "Calculator",
-    "Calc: Area from Inlet & Stoich",
-    "Sensitivity: CO₂ Utilization",
-    "Sensitivity: Area × Stack / CO₂ Cap",
+    "Carbon & Energy",
+    "Area Sizing",
+    "CO₂ Utilization",
+    "Area × Stack",
+    "Durability",
 ])
 
 # -------------------- Tab: Instructions --------------------
@@ -384,7 +531,10 @@ with tab_instructions:
                 • S > 1 means excess CO₂ feed and lower utilization (e.g., S = 2 → 50% utilization).
          
         
-        - **Calc: Area from Inlet & Stoich:**  
+        - **Carbon & Energy:**  
+          Builds a closed carbon balance that distinguishes product carbon, carbonate/bicarbonate loss, dissolved or unaccounted carbon, unreacted CO₂, recycle, purge, and anode CO₂ recovery. A Sankey diagram makes the pathways visible. The same tab reports product-specific energy efficiency and specific electricity consumption.
+
+        - **Area Sizing:**  
           Provides the **required electrode area** per unit and total area for a given CO₂ inlet and stoichiometric ratio (S).  
           Includes per-product outputs (gas flow in the selected SLPM/SCCM unit, liquid kg/h, etc.).
     
@@ -396,6 +546,9 @@ with tab_instructions:
     
         - **Sensitivity: CO₂ Supply Cap:**  
           Determines the maximum achievable utilization given a CO₂ feed limitation.
+
+        - **Durability:**  
+          Converts voltage rise, FE loss, and carbon-efficiency loss into stack life, replacement frequency, lifetime production, and lifetime-average energy demand.
     
         - **Constants & Reference (this tab):**  
           Lists all physical constants, product properties, and data sources.
@@ -404,7 +557,8 @@ with tab_instructions:
         - You can download any result table via the “Download CSV” buttons.  
         - Hover over plots for tooltips showing precise data points.  
         - Use the sidebar toggle to display all gas flows in **SLPM** or **SCCM**.
-        - Adjust **molar volume basis (STP/SATP)** in the sidebar to update gas volumetric conversions.
+        - Adjust **molar volume basis (STP/SATP)** in the sidebar to update standard gas volumetric conversions.
+        - Open **Real gas conditions** only when you want to translate standard dry flow into actual wet flow at your measured temperature, humidity, outlet pressure, and gas ΔP.
         - If you find any mistakes please feel free to [reach out](https://people.llnl.gov/prajapati3)!
     
         ---
@@ -419,6 +573,8 @@ with tab_instructions:
 - **Current basis:** `{basis_label}`  
 - **Gas flow display unit:** `{GAS_FLOW_UNIT}`  
 - **Stacking:** `{'ON' if use_stack_global else 'OFF'}` — Units: `{n_units_global}`  
+- **Real gas interpretation:** `{gas_temperature_C:.1f} °C`, `{gas_relative_humidity_pct:.1f}% RH`, outlet `{gas_outlet_pressure_bar_abs:.4f} bar(a)`, gas ΔP `{gas_pressure_drop_bar:.4f} bar`  
+- **Liquid-side ΔP reference:** `{liquid_pressure_drop_bar:.4f} bar`  
 - **Gas products:** {", ".join(GASES) if GASES else "None"}  
 - **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
 """)
@@ -594,6 +750,30 @@ with tab_calc:
     gas_total_out_slpm = sum(core.get(f"{p}_slpm", 0.0) for p in GASES) + max(co2_in_slpm - core["CO2_min_slpm"], 0.0)
     st.metric(f"Gas Total Outlet ({GAS_FLOW_UNIT})", format_gas_flow(gas_total_out_slpm))
 
+    with st.expander("Actual wet flow at measured gas conditions", expanded=False):
+        actual_in_L_min, water_in_pct, actual_warn_in = standard_dry_to_actual_wet_lpm(
+            co2_in_slpm, gas_temperature_C, gas_inlet_pressure_bar_abs, gas_relative_humidity_pct
+        )
+        actual_out_L_min, water_out_pct, actual_warn_out = standard_dry_to_actual_wet_lpm(
+            gas_total_out_slpm, gas_temperature_C, gas_outlet_pressure_bar_abs, gas_relative_humidity_pct
+        )
+        rg1, rg2, rg3, rg4 = st.columns(4)
+        with rg1: st.metric("Inlet pressure", f"{gas_inlet_pressure_bar_abs:.3f} bar(a)")
+        with rg2: st.metric("Gas ΔP", f"{gas_pressure_drop_bar:.3f} bar")
+        with rg3: st.metric("Actual wet inlet", f"{actual_in_L_min:,.3f} L/min")
+        with rg4: st.metric("Actual wet outlet", f"{actual_out_L_min:,.3f} L/min")
+        st.caption(
+            f"At {gas_temperature_C:.1f} °C and {gas_relative_humidity_pct:.1f}% RH, water vapor is approximately "
+            f"{water_in_pct:.2f} vol% at the inlet and {water_out_pct:.2f} vol% at the outlet. "
+            f"The electrochemical balance still uses dry standard flow in {GAS_FLOW_UNIT}."
+        )
+        if liquid_pressure_drop_bar > 0:
+            st.info(
+                f"Liquid-side ΔP is recorded as {liquid_pressure_drop_bar:.3f} bar. It is not interpreted as transmembrane pressure because absolute liquid and gas pressures are not both specified."
+            )
+        if actual_warn_in or actual_warn_out:
+            st.warning(actual_warn_in or actual_warn_out)
+
     # LIQUID metrics
     st.subheader("Liquid production (true condensed)")
     liq_rows = []
@@ -616,6 +796,291 @@ with tab_calc:
 
     if warn:
         st.warning(warn)
+
+# -------------------- Tab: Carbon balance and product-specific energy --------------------
+with tab_carbon:
+    st.subheader("Carbon Balance & Product-Specific Energy")
+    st.caption("Start with the electrochemical operating point, then describe where carbon goes. Advanced energy sensitivity is optional and collapsed by default.")
+
+    with st.expander("How the carbon model works", expanded=True):
+        st.markdown(r"""
+        **Theoretical product-carbon demand** is calculated directly from current and Faradaic efficiency:
+
+        \[
+        \dot n_i = \frac{I\,FE_i}{n_{e,i}F}, \qquad
+        \dot n_{CO_2,\,product}=\sum_i \nu_{CO_2,i}\dot n_i
+        \]
+
+        The gross CO₂ feed is then split into **product-bound carbon**, **carbonate/bicarbonate**, **dissolved or unaccounted carbon**, and **unreacted CO₂**. Product recovery, anode CO₂ recovery, and unreacted-gas recycle are applied afterward.
+
+        - **Single-pass recovered carbon efficiency** = recovered product carbon ÷ gross CO₂ feed
+        - **Cathodic carbon selectivity** = product-bound carbon ÷ (product-bound carbon + carbonate/bicarbonate carbon)
+        - **Overall fresh-feed carbon efficiency** = recovered product carbon ÷ net fresh CO₂ after recycle and anode recovery
+
+        The Sankey uses a **CO₂-equivalent molar-flow basis**, so carbon in multi-carbon products is counted correctly.
+        """)
+
+    st.markdown("### 1. Electrochemical operating point")
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        cb_area = st.number_input("Active area per unit", min_value=0.0, value=100.0, step=5.0, key="cb_area")
+        cb_area_unit = st.selectbox("Area unit", ["cm²", "m²"], index=0, key="cb_area_unit")
+    with c2:
+        cb_j = st.number_input("Current density", min_value=0.0, value=200.0, step=10.0, key="cb_j")
+        cb_j_unit = st.selectbox("j units", ["mA/cm²", "A/cm²", "A/m²"], index=0, key="cb_j_unit")
+    with c3:
+        cb_V = st.number_input("Cell voltage (V)", min_value=0.0, value=3.2, step=0.1, key="cb_V")
+    with c4:
+        cb_units = n_units_global if use_stack_global else 1
+        st.info(f"Using global stack setting: **{cb_units} unit(s)**")
+
+    cb_fe_map = fe_grid_inputs("cb", PRODUCT_LIST, title="Faradaic-efficiency split (%)", per_row=4)
+    cb_fe_sum = sum(cb_fe_map.values())
+    if cb_fe_sum > 100.0 + 1e-9:
+        st.warning(f"The entered FE sum is {cb_fe_sum:.1f}%. Values above 100% are not physically closed.")
+
+    cb_inp = ElectrolyzerInputs(
+        area_value=cb_area,
+        area_unit=cb_area_unit,
+        j_value=cb_j,
+        j_unit=cb_j_unit,
+        V_cell=cb_V,
+        fe_map_pct=cb_fe_map,
+        n_units=cb_units,
+        molar_vol_L=mv_L_per_mol,
+    )
+    cb_core = compute_core_products(cb_inp)
+    product_carbon_slpm = cb_core["CO2_min_slpm"]
+
+    st.markdown("### 2. Feed and carbon pathways")
+    feed_left, feed_right = st.columns([1, 2])
+    with feed_left:
+        if st.session_state.get("cb_feed_mode") in {"Stoich (S)", "Inlet flow (SLPM)", "Inlet flow (SCCM)"}:
+            st.session_state["cb_feed_mode"] = "stoich" if st.session_state["cb_feed_mode"] == "Stoich (S)" else "inlet"
+        cb_feed_mode = st.radio(
+            "CO₂ feed input mode",
+            options=["stoich", "inlet"],
+            horizontal=True,
+            key="cb_feed_mode",
+            format_func=lambda x: "Stoich (S)" if x == "stoich" else f"Inlet flow ({GAS_FLOW_UNIT})",
+        )
+        if cb_feed_mode == "stoich":
+            cb_S = st.number_input("Stoich S based on product carbon", min_value=1.0, value=2.0, step=0.1, key="cb_S")
+            cb_feed_slpm = cb_S * product_carbon_slpm
+        else:
+            cb_feed_display = gas_flow_number_input("Gross CO₂ inlet", default_slpm=10.0, step_slpm=0.5, key="cb_inlet")
+            cb_feed_slpm = display_to_slpm(cb_feed_display)
+            cb_S = cb_feed_slpm / max(product_carbon_slpm, EPS) if product_carbon_slpm > EPS else np.inf
+
+    with feed_right:
+        p1, p2, p3 = st.columns(3)
+        with p1:
+            carbonate_ratio_pct = st.number_input(
+                "Carbonate/bicarbonate loss (% of product-bound carbon)",
+                min_value=0.0, value=50.0, step=5.0, key="cb_carbonate_ratio",
+                help="100% means one additional mole of CO₂ is diverted to carbonate/bicarbonate for every mole of CO₂ incorporated into products.",
+            )
+            dissolved_feed_pct = st.number_input(
+                "Dissolved/unaccounted carbon (% of gross feed)",
+                min_value=0.0, max_value=100.0, value=0.0, step=1.0, key="cb_dissolved_pct",
+            )
+        with p2:
+            product_recovery_pct = st.number_input(
+                "Carbonaceous-product recovery (%)",
+                min_value=0.0, max_value=100.0, value=100.0, step=1.0, key="cb_product_recovery",
+                help="Accounts for product crossover, incomplete capture, or downstream product loss.",
+            )
+            anode_recovery_pct = st.number_input(
+                "Anode CO₂ recovery from carbonate (%)",
+                min_value=0.0, max_value=100.0, value=0.0, step=5.0, key="cb_anode_recovery",
+            )
+        with p3:
+            unreacted_recycle_pct = st.number_input(
+                "Unreacted CO₂ recovered for recycle (%)",
+                min_value=0.0, max_value=100.0, value=0.0, step=5.0, key="cb_recycle_recovery",
+            )
+            st.caption("Recycle and anode recovery reduce fresh-feed demand; they do not change the gross single-pass balance.")
+
+    carbonate_slpm = product_carbon_slpm * carbonate_ratio_pct / 100.0
+    dissolved_slpm = cb_feed_slpm * dissolved_feed_pct / 100.0
+    required_before_unreacted_slpm = product_carbon_slpm + carbonate_slpm + dissolved_slpm
+    feasible_carbon_balance = cb_feed_slpm + EPS >= required_before_unreacted_slpm
+
+    if product_carbon_slpm <= EPS:
+        st.error("No carbon-containing products are being formed. Increase FE for at least one carbon product.")
+    elif not feasible_carbon_balance:
+        minimum_S_with_losses = required_before_unreacted_slpm / max(product_carbon_slpm, EPS)
+        st.error(
+            f"The gross feed is too small for the selected product and loss pathways. "
+            f"Required minimum = {format_gas_flow(required_before_unreacted_slpm)} {GAS_FLOW_UNIT} "
+            f"(effective S = {minimum_S_with_losses:.2f})."
+        )
+    else:
+        unreacted_slpm = max(0.0, cb_feed_slpm - required_before_unreacted_slpm)
+        recovered_product_slpm = product_carbon_slpm * product_recovery_pct / 100.0
+        product_loss_slpm = product_carbon_slpm - recovered_product_slpm
+        anode_recovered_slpm = carbonate_slpm * anode_recovery_pct / 100.0
+        net_carbonate_loss_slpm = carbonate_slpm - anode_recovered_slpm
+        recycle_slpm = unreacted_slpm * unreacted_recycle_pct / 100.0
+        purge_slpm = unreacted_slpm - recycle_slpm
+        net_fresh_feed_slpm = max(cb_feed_slpm - anode_recovered_slpm - recycle_slpm, EPS)
+
+        single_pass_recovered_ce = recovered_product_slpm / max(cb_feed_slpm, EPS)
+        cathodic_carbon_selectivity = product_carbon_slpm / max(product_carbon_slpm + carbonate_slpm, EPS)
+        overall_fresh_ce = recovered_product_slpm / max(net_fresh_feed_slpm, EPS)
+        gross_single_pass_conversion = (product_carbon_slpm + carbonate_slpm + dissolved_slpm) / max(cb_feed_slpm, EPS)
+
+        carbon_product_mass_kg_h = 0.0
+        for p in PRODUCT_LIST:
+            if PRODUCT_MAP[p]["co2_per_mol"] > 0:
+                n_p = cb_core.get(f"{p}_mol_s", 0.0)
+                carbon_product_mass_kg_h += n_p * PRODUCT_MAP[p]["MW (g/mol)"] * 3600.0 / 1000.0
+        recovered_product_mass_kg_h = carbon_product_mass_kg_h * product_recovery_pct / 100.0
+        fresh_co2_mol_s = slpm_to_mol_s(net_fresh_feed_slpm, mv_L_per_mol)
+        fresh_co2_kg_h = fresh_co2_mol_s * MW_CO2_G_MOL * 3600.0 / 1000.0
+        kg_co2_per_kg_product = fresh_co2_kg_h / recovered_product_mass_kg_h if recovered_product_mass_kg_h > EPS else np.nan
+
+        st.markdown("### 3. Carbon-efficiency results")
+        m1, m2, m3, m4 = st.columns(4)
+        with m1: st.metric("Recovered single-pass CE", f"{100*single_pass_recovered_ce:.1f}%")
+        with m2: st.metric("Cathodic carbon selectivity", f"{100*cathodic_carbon_selectivity:.1f}%")
+        with m3: st.metric("Overall fresh-feed CE", f"{100*overall_fresh_ce:.1f}%")
+        with m4: st.metric("Gross single-pass conversion", f"{100*gross_single_pass_conversion:.1f}%")
+
+        m5, m6, m7, m8 = st.columns(4)
+        with m5: st.metric(f"Gross CO₂ feed ({GAS_FLOW_UNIT})", format_gas_flow(cb_feed_slpm))
+        with m6: st.metric(f"Net fresh CO₂ ({GAS_FLOW_UNIT})", format_gas_flow(net_fresh_feed_slpm))
+        with m7: st.metric("Recovered carbon products", f"{recovered_product_mass_kg_h:,.4f} kg/h")
+        with m8: st.metric("Fresh CO₂ / recovered product", "—" if np.isnan(kg_co2_per_kg_product) else f"{kg_co2_per_kg_product:,.3f} kg/kg")
+
+        sankey_labels = [
+            "Gross CO₂ feed", "Product-bound carbon", "Carbonate / bicarbonate",
+            "Dissolved / unaccounted", "Unreacted CO₂", "Recovered product",
+            "Product crossover / loss", "Recovered anode CO₂", "Net carbonate loss",
+            "Recycle CO₂", "Purge CO₂",
+        ]
+        sankey_source = [0, 1, 1, 0, 2, 2, 0, 0, 4, 4]
+        sankey_target = [1, 5, 6, 2, 7, 8, 3, 4, 9, 10]
+        sankey_values_slpm = [
+            product_carbon_slpm, recovered_product_slpm, product_loss_slpm,
+            carbonate_slpm, anode_recovered_slpm, net_carbonate_loss_slpm,
+            dissolved_slpm, unreacted_slpm, recycle_slpm, purge_slpm,
+        ]
+        sankey_values_display = [slpm_to_display(v) for v in sankey_values_slpm]
+        sankey_fig = go.Figure(data=[go.Sankey(
+            arrangement="snap",
+            valueformat=".3f",
+            valuesuffix=f" {GAS_FLOW_UNIT} CO₂-eq",
+            node=dict(label=sankey_labels, pad=18, thickness=18),
+            link=dict(source=sankey_source, target=sankey_target, value=sankey_values_display),
+        )])
+        sankey_fig.update_layout(
+            title_text="Carbon pathways on a CO₂-equivalent molar-flow basis",
+            font_size=12,
+            height=520,
+            margin=dict(l=10, r=10, t=55, b=10),
+        )
+        st.plotly_chart(sankey_fig, use_container_width=True)
+
+        carbon_rows = [
+            ("Gross CO₂ feed", cb_feed_slpm),
+            ("Product-bound carbon", product_carbon_slpm),
+            ("Recovered product carbon", recovered_product_slpm),
+            ("Product crossover / recovery loss", product_loss_slpm),
+            ("Carbonate / bicarbonate carbon", carbonate_slpm),
+            ("Recovered anode CO₂", anode_recovered_slpm),
+            ("Net carbonate loss", net_carbonate_loss_slpm),
+            ("Dissolved / unaccounted carbon", dissolved_slpm),
+            ("Unreacted CO₂", unreacted_slpm),
+            ("Recycle CO₂", recycle_slpm),
+            ("Purge CO₂", purge_slpm),
+            ("Net fresh CO₂ requirement", net_fresh_feed_slpm),
+        ]
+        carbon_df = pd.DataFrame({
+            "Carbon pathway": [r[0] for r in carbon_rows],
+            f"CO₂-equivalent flow ({GAS_FLOW_UNIT})": [slpm_to_display(r[1]) for r in carbon_rows],
+            "mol CO₂-eq/s": [slpm_to_mol_s(r[1], mv_L_per_mol) for r in carbon_rows],
+        })
+        with st.expander("View and download carbon-flow table", expanded=False):
+            st.dataframe(carbon_df, hide_index=True, use_container_width=True)
+            st.download_button(
+                "Download carbon balance (CSV)",
+                data=carbon_df.to_csv(index=False).encode("utf-8"),
+                file_name="cheese_carbon_balance.csv",
+                mime="text/csv",
+                key="cb_download",
+            )
+
+        st.markdown("### 4. Product-specific energy")
+        energy_df = product_specific_energy_rows(cb_core, cb_fe_map, cb_V)
+        if energy_df.empty:
+            st.info("Enter a nonzero FE to calculate product-specific energy metrics.")
+        else:
+            total_lhv_eff = energy_df["LHV efficiency contribution (%)"].sum(skipna=True)
+            total_hhv_eff = energy_df["HHV efficiency contribution (%)"].sum(skipna=True)
+            e1, e2, e3 = st.columns(3)
+            with e1: st.metric("Stack power", f"{cb_core['I_total_A']*cb_V/1000.0:,.3f} kW")
+            with e2: st.metric("Total LHV efficiency", f"{total_lhv_eff:.1f}%")
+            with e3: st.metric("Total HHV efficiency", f"{total_hhv_eff:.1f}%")
+            st.dataframe(
+                energy_df,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "FE (%)": st.column_config.NumberColumn(format="%.1f"),
+                    "Production (kg/h)": st.column_config.NumberColumn(format="%.5f"),
+                    "Specific electricity (kWh/kg)": st.column_config.NumberColumn(format="%.2f"),
+                    "Thermodynamic efficiency contribution (%)": st.column_config.NumberColumn(format="%.1f"),
+                    "LHV efficiency contribution (%)": st.column_config.NumberColumn(format="%.1f"),
+                    "HHV efficiency contribution (%)": st.column_config.NumberColumn(format="%.1f"),
+                },
+            )
+            st.caption("Specific electricity assigns the full electrochemical voltage requirement to formation of each product at its own FE. LHV/HHV columns show each product's contribution to total stack energy efficiency.")
+
+            with st.expander("Explore voltage × FE energy sensitivity", expanded=False):
+                energy_product = st.selectbox("Product", PRODUCT_LIST, index=0, key="cb_energy_product")
+                es1, es2, es3, es4 = st.columns(4)
+                with es1:
+                    V_min_s = st.number_input("Voltage min (V)", min_value=0.1, value=2.0, step=0.1, key="cb_Vmin")
+                    V_max_s = st.number_input("Voltage max (V)", min_value=0.1, value=4.0, step=0.1, key="cb_Vmax")
+                with es2:
+                    V_step_s = st.number_input("Voltage step (V)", min_value=0.01, value=0.1, step=0.05, key="cb_Vstep")
+                with es3:
+                    FE_min_s = st.number_input("FE min (%)", min_value=1.0, max_value=100.0, value=20.0, step=5.0, key="cb_FEmin")
+                    FE_max_s = st.number_input("FE max (%)", min_value=1.0, max_value=100.0, value=100.0, step=5.0, key="cb_FEmax")
+                with es4:
+                    FE_step_s = st.number_input("FE step (%)", min_value=1.0, value=10.0, step=1.0, key="cb_FEstep")
+
+                if V_max_s < V_min_s or FE_max_s < FE_min_s:
+                    st.warning("Maximum sensitivity values must be greater than or equal to minimum values.")
+                else:
+                    props = PRODUCT_MAP[energy_product]
+                    n_e = props["nₑ⁻ to product"]
+                    MW_kg_mol = props["MW (g/mol)"] / 1000.0
+                    rows_energy_sens = []
+                    for V_s in np.arange(V_min_s, V_max_s + 1e-9, V_step_s):
+                        for FE_s in np.arange(FE_min_s, FE_max_s + 1e-9, FE_step_s):
+                            sec = n_e * F * V_s / ((FE_s / 100.0) * MW_kg_mol * 3.6e6)
+                            rows_energy_sens.append({"Cell voltage (V)": V_s, "FE (%)": FE_s, "kWh/kg": sec})
+                    df_energy_sens = pd.DataFrame(rows_energy_sens)
+                    energy_heat = alt.Chart(df_energy_sens).mark_rect().encode(
+                        x=alt.X("Cell voltage (V):O", title="Cell voltage (V)"),
+                        y=alt.Y("FE (%):O", title=f"{energy_product} FE (%)"),
+                        color=alt.Color("kWh/kg:Q", title="kWh/kg"),
+                        tooltip=["Cell voltage (V)", "FE (%)", alt.Tooltip("kWh/kg:Q", format=".2f")],
+                    ).properties(height=390, title=f"{energy_product} specific electricity — lower is better")
+                    st.altair_chart(energy_heat, use_container_width=True)
+
+        with st.expander("Actual wet-flow interpretation for this carbon case", expanded=False):
+            actual_cb_in, cb_water_pct, cb_actual_warn = standard_dry_to_actual_wet_lpm(
+                cb_feed_slpm, gas_temperature_C, gas_inlet_pressure_bar_abs, gas_relative_humidity_pct
+            )
+            ac1, ac2, ac3 = st.columns(3)
+            with ac1: st.metric("Actual wet gross inlet", f"{actual_cb_in:,.3f} L/min")
+            with ac2: st.metric("Inlet pressure", f"{gas_inlet_pressure_bar_abs:.3f} bar(a)")
+            with ac3: st.metric("Water vapor", f"{cb_water_pct:.2f} vol%")
+            if cb_actual_warn:
+                st.warning(cb_actual_warn)
 
 # -------------------- Tab: Calc — Size Active Area from CO₂ Inlet & Stoich --------------------
 with tab_size:
@@ -701,6 +1166,17 @@ with tab_size:
             for i, (p, slpm_p) in enumerate(gas_rows):
                 with colsG[i]: st.metric(p, format_gas_flow(slpm_p))
             st.write(f"**Gas products total ({GAS_FLOW_UNIT})**: {format_gas_flow(gas_total_slpm)}")
+
+        with st.expander("Actual wet inlet at measured gas conditions", expanded=False):
+            actual_sz_in, water_sz_pct, actual_sz_warn = standard_dry_to_actual_wet_lpm(
+                co2_in_slpm_sz, gas_temperature_C, gas_inlet_pressure_bar_abs, gas_relative_humidity_pct
+            )
+            as1, as2, as3 = st.columns(3)
+            with as1: st.metric("Actual wet inlet", f"{actual_sz_in:,.3f} L/min")
+            with as2: st.metric("Inlet pressure", f"{gas_inlet_pressure_bar_abs:.3f} bar(a)")
+            with as3: st.metric("Water vapor", f"{water_sz_pct:.2f} vol%")
+            if actual_sz_warn:
+                st.warning(actual_sz_warn)
 
         st.subheader("Resulting Liquid Products")
         if liq_rows:
@@ -890,6 +1366,293 @@ with tab_s3:
         st.warning("Cap is below the theoretical minimum CO₂ required at these operating conditions. Reduce current (j), area, units, or adjust FE split.")
     else:
         st.success("Feasible. You may increase utilization up to the shown maximum by reducing S accordingly.")
+
+# -------------------- Tab: Durability, degradation, and stack replacement --------------------
+with tab_durability:
+    st.subheader("Durability, Degradation & Stack Replacement")
+    st.caption("Translate measured degradation rates into replacement intervals, lifetime production, and lifetime-average energy demand.")
+
+    with st.expander("How to use this model", expanded=True):
+        st.markdown("""
+        1. Choose the product whose FE will be tracked.
+        2. Enter beginning-of-life voltage, FE, and carbon efficiency.
+        3. Enter linear degradation rates per 1,000 operating hours.
+        4. Define replacement thresholds. The earliest threshold becomes the predicted stack life.
+        5. Set plant life and availability to estimate replacements and cumulative production.
+
+        This is a **screening model**. It assumes constant current density and linear degradation within each stack cycle, followed by full performance reset after replacement.
+        """)
+
+    st.markdown("### 1. Beginning-of-life operating point")
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        dur_product = st.selectbox("Tracked product", PRODUCT_LIST, index=0, key="dur_product")
+        dur_area = st.number_input("Active area per unit (cm²)", min_value=0.0, value=100.0, step=5.0, key="dur_area")
+    with d2:
+        dur_j = st.number_input("Current density (mA/cm²)", min_value=0.0, value=200.0, step=10.0, key="dur_j")
+        dur_units = n_units_global if use_stack_global else 1
+        st.info(f"Using **{dur_units} unit(s)** from Global Settings")
+    with d3:
+        dur_V0 = st.number_input("Initial cell voltage (V)", min_value=0.0, value=3.0, step=0.05, key="dur_V0")
+        dur_FE0 = st.number_input("Initial product FE (%)", min_value=0.0, max_value=100.0, value=90.0, step=1.0, key="dur_FE0")
+    with d4:
+        dur_CE0 = st.number_input(
+            "Initial fresh-feed carbon efficiency (%)",
+            min_value=0.0, max_value=100.0,
+            value=80.0 if PRODUCT_MAP[dur_product]["co2_per_mol"] > 0 else 100.0,
+            step=1.0,
+            key="dur_CE0",
+            disabled=PRODUCT_MAP[dur_product]["co2_per_mol"] <= 0,
+        )
+        st.caption("Carbon efficiency is not applied to H₂ because H₂ contains no carbon.")
+
+    st.markdown("### 2. Degradation rates and replacement limits")
+    rate1, rate2, rate3, limit1 = st.columns(4)
+    with rate1:
+        voltage_rise_mV_1000h = st.number_input("Voltage rise (mV / 1,000 h)", min_value=0.0, value=50.0, step=5.0, key="dur_dV")
+        max_voltage = st.number_input("Maximum cell voltage (V)", min_value=0.0, value=3.5, step=0.05, key="dur_Vmax")
+    with rate2:
+        fe_loss_pp_1000h = st.number_input("FE loss (percentage points / 1,000 h)", min_value=0.0, value=2.0, step=0.5, key="dur_dFE")
+        min_FE = st.number_input("Minimum acceptable FE (%)", min_value=0.0, max_value=100.0, value=70.0, step=1.0, key="dur_FEmin")
+    with rate3:
+        ce_loss_pp_1000h = st.number_input(
+            "Carbon-efficiency loss (points / 1,000 h)", min_value=0.0, value=2.0, step=0.5, key="dur_dCE",
+            disabled=PRODUCT_MAP[dur_product]["co2_per_mol"] <= 0,
+        )
+        min_CE = st.number_input(
+            "Minimum carbon efficiency (%)", min_value=0.0, max_value=100.0, value=60.0, step=1.0, key="dur_CEmin",
+            disabled=PRODUCT_MAP[dur_product]["co2_per_mol"] <= 0,
+        )
+    with limit1:
+        scheduled_stack_hours = st.number_input("Scheduled maximum stack hours", min_value=1.0, value=10000.0, step=500.0, key="dur_sched_hours")
+        replacement_downtime_h = st.number_input("Downtime per replacement (h)", min_value=0.0, value=24.0, step=4.0, key="dur_downtime")
+
+    st.markdown("### 3. Deployment horizon")
+    h1, h2, h3, h4 = st.columns(4)
+    with h1:
+        plant_life_years = st.number_input("Plant life (years)", min_value=0.1, value=10.0, step=1.0, key="dur_years")
+    with h2:
+        base_capacity_factor_pct = st.number_input("Base capacity factor (%)", min_value=0.0, max_value=100.0, value=90.0, step=1.0, key="dur_cf")
+    with h3:
+        replacement_stack_cost = st.number_input("Replacement stack cost ($, optional)", min_value=0.0, value=0.0, step=1000.0, key="dur_repl_cost")
+    with h4:
+        st.caption("Base capacity factor excludes the additional replacement downtime entered above.")
+
+    voltage_rate_V_h = voltage_rise_mV_1000h / 1e6
+    fe_rate_pp_h = fe_loss_pp_1000h / 1000.0
+    ce_rate_pp_h = ce_loss_pp_1000h / 1000.0
+
+    t_voltage = (max_voltage - dur_V0) / voltage_rate_V_h if voltage_rate_V_h > EPS and max_voltage > dur_V0 else np.inf
+    t_fe = (dur_FE0 - min_FE) / fe_rate_pp_h if fe_rate_pp_h > EPS and dur_FE0 > min_FE else np.inf
+    if PRODUCT_MAP[dur_product]["co2_per_mol"] > 0:
+        t_ce = (dur_CE0 - min_CE) / ce_rate_pp_h if ce_rate_pp_h > EPS and dur_CE0 > min_CE else np.inf
+    else:
+        t_ce = np.inf
+
+    trigger_name, cycle_life_h = first_positive_minimum({
+        "Voltage limit": t_voltage,
+        "FE limit": t_fe,
+        "Carbon-efficiency limit": t_ce,
+        "Scheduled stack-hour limit": scheduled_stack_hours,
+    })
+
+    if not np.isfinite(cycle_life_h) or cycle_life_h <= EPS:
+        st.error("No valid positive stack-life limit was found. Check degradation rates and thresholds.")
+    elif max_voltage <= dur_V0 or min_FE >= dur_FE0 or (PRODUCT_MAP[dur_product]["co2_per_mol"] > 0 and min_CE >= dur_CE0):
+        st.error("At least one replacement threshold is already reached or exceeded at beginning of life.")
+    else:
+        total_calendar_h = plant_life_years * 8760.0
+        planned_operating_h = total_calendar_h * base_capacity_factor_pct / 100.0
+
+        # Treat the capacity-factor-adjusted time as the available deployment window.
+        # Each completed replacement block contains one stack life plus its downtime;
+        # the final stack does not incur end-of-project replacement downtime.
+        if replacement_downtime_h > EPS:
+            completed_replacement_blocks = int(np.floor(planned_operating_h / (cycle_life_h + replacement_downtime_h)))
+            remaining_window_h = planned_operating_h - completed_replacement_blocks * (cycle_life_h + replacement_downtime_h)
+            actual_operating_h = completed_replacement_blocks * cycle_life_h + min(cycle_life_h, max(0.0, remaining_window_h))
+            replacements = completed_replacement_blocks
+        else:
+            actual_operating_h = planned_operating_h
+            replacements = max(0, int(np.ceil(actual_operating_h / cycle_life_h - 1e-12)) - 1)
+
+        area_m2_dur = dur_area * 1e-4
+        j_A_m2_dur = dur_j * 10.0
+        I_total_dur = area_m2_dur * j_A_m2_dur * dur_units
+        props_dur = PRODUCT_MAP[dur_product]
+        n_e_dur = props_dur["nₑ⁻ to product"]
+        MW_kg_mol_dur = props_dur["MW (g/mol)"] / 1000.0
+        carbon_per_product = props_dur["co2_per_mol"]
+
+        # Lifetime totals are evaluated from a representative degradation cycle and
+        # scaled analytically, so very short stack lives cannot create enormous tables.
+        mass_rate_per_FE_point = I_total_dur * MW_kg_mol_dur * 3600.0 / (n_e_dur * F * 100.0)
+
+        def product_integral_kg(duration_h: float) -> float:
+            d = max(0.0, min(float(duration_h), cycle_life_h))
+            return mass_rate_per_FE_point * max(0.0, dur_FE0 * d - 0.5 * fe_rate_pp_h * d * d)
+
+        def energy_integral_kWh(duration_h: float) -> float:
+            d = max(0.0, min(float(duration_h), cycle_life_h))
+            return I_total_dur / 1000.0 * (dur_V0 * d + 0.5 * voltage_rate_V_h * d * d)
+
+        def fresh_co2_integral_kg(duration_h: float) -> float:
+            if carbon_per_product <= 0:
+                return 0.0
+            d = max(0.0, min(float(duration_h), cycle_life_h))
+            if d <= EPS:
+                return 0.0
+            age = np.linspace(0.0, d, 300)
+            fe_pct_local = np.maximum(0.0, dur_FE0 - fe_rate_pp_h * age)
+            ce_pct_local = np.maximum(EPS, dur_CE0 - ce_rate_pp_h * age)
+            n_product_local = I_total_dur * (fe_pct_local / 100.0) / (n_e_dur * F)
+            fresh_co2_kg_h_local = (
+                n_product_local * carbon_per_product / np.maximum(ce_pct_local / 100.0, EPS)
+                * MW_CO2_G_MOL * 3600.0 / 1000.0
+            )
+            return trapezoid_integral(fresh_co2_kg_h_local, age)
+
+        full_cycles = int(np.floor(actual_operating_h / cycle_life_h + 1e-12))
+        partial_cycle_h = max(0.0, actual_operating_h - full_cycles * cycle_life_h)
+        if partial_cycle_h < 1e-8:
+            partial_cycle_h = 0.0
+
+        full_cycle_product_kg = product_integral_kg(cycle_life_h)
+        full_cycle_energy_kWh = energy_integral_kWh(cycle_life_h)
+        full_cycle_fresh_co2_kg = fresh_co2_integral_kg(cycle_life_h)
+
+        total_product_kg = full_cycles * full_cycle_product_kg + product_integral_kg(partial_cycle_h)
+        total_energy_kWh = full_cycles * full_cycle_energy_kWh + energy_integral_kWh(partial_cycle_h)
+        total_fresh_co2_kg = full_cycles * full_cycle_fresh_co2_kg + fresh_co2_integral_kg(partial_cycle_h)
+
+        initial_n_product_mol_s = I_total_dur * (dur_FE0 / 100.0) / (n_e_dur * F)
+        initial_mass_rate_kg_h = initial_n_product_mol_s * MW_kg_mol_dur * 3600.0
+        ideal_product_kg = initial_mass_rate_kg_h * actual_operating_h
+        production_loss_pct = 100.0 * (1.0 - total_product_kg / ideal_product_kg) if ideal_product_kg > EPS else 0.0
+        lifetime_sec = total_energy_kWh / total_product_kg if total_product_kg > EPS else np.nan
+        kg_co2_per_kg = total_fresh_co2_kg / total_product_kg if total_product_kg > EPS and carbon_per_product > 0 else np.nan
+        total_replacement_cost = replacements * replacement_stack_cost
+
+        # Keep the browser responsive: plot at most the first 20 stack cycles.
+        total_cycles_operated = full_cycles + (1 if partial_cycle_h > EPS else 0)
+        cycles_to_plot = min(total_cycles_operated, 20)
+        profile_truncated = total_cycles_operated > cycles_to_plot
+        segments = []
+        cycle_starts = []
+        for cycle_zero_based in range(cycles_to_plot):
+            cycle_start = cycle_zero_based * cycle_life_h
+            if cycle_zero_based < full_cycles:
+                duration = cycle_life_h
+            else:
+                duration = partial_cycle_h
+            if duration <= EPS:
+                continue
+            ages = np.linspace(0.0, duration, 80)
+            cumulative_h = cycle_start + ages
+            voltage = dur_V0 + voltage_rate_V_h * ages
+            fe_pct = np.maximum(0.0, dur_FE0 - fe_rate_pp_h * ages)
+            if carbon_per_product > 0:
+                ce_pct = np.maximum(EPS, dur_CE0 - ce_rate_pp_h * ages)
+            else:
+                ce_pct = np.full_like(ages, np.nan)
+
+            fe_frac = fe_pct / 100.0
+            n_product_mol_s = I_total_dur * fe_frac / (n_e_dur * F)
+            mass_rate_kg_h = n_product_mol_s * MW_kg_mol_dur * 3600.0
+            power_kW = I_total_dur * voltage / 1000.0
+            if carbon_per_product > 0:
+                product_carbon_mol_s = n_product_mol_s * carbon_per_product
+                fresh_co2_mol_s = product_carbon_mol_s / np.maximum(ce_pct / 100.0, EPS)
+                fresh_co2_kg_h = fresh_co2_mol_s * MW_CO2_G_MOL * 3600.0 / 1000.0
+            else:
+                fresh_co2_kg_h = np.zeros_like(ages)
+
+            cumulative_product_kg = cycle_zero_based * full_cycle_product_kg + (
+                mass_rate_per_FE_point * np.maximum(0.0, dur_FE0 * ages - 0.5 * fe_rate_pp_h * ages * ages)
+            )
+            segments.append(pd.DataFrame({
+                "Operating hour": cumulative_h,
+                "Cycle": cycle_zero_based + 1,
+                "Cycle age (h)": ages,
+                "Cell voltage (V)": voltage,
+                "Product FE (%)": fe_pct,
+                "Carbon efficiency (%)": ce_pct,
+                "Product rate (kg/h)": mass_rate_kg_h,
+                "Power (kW)": power_kW,
+                "Fresh CO2 rate (kg/h)": fresh_co2_kg_h,
+                "Cumulative product (kg)": cumulative_product_kg,
+            }))
+            cycle_starts.append(cycle_start)
+
+        dur_df = pd.concat(segments, ignore_index=True) if segments else pd.DataFrame()
+
+        r1, r2, r3, r4 = st.columns(4)
+        with r1: st.metric("Predicted stack life", f"{cycle_life_h:,.0f} h")
+        with r2: st.metric("Limiting trigger", trigger_name)
+        with r3: st.metric("Stack replacements", f"{replacements:,d}")
+        with r4: st.metric("Actual operating hours", f"{actual_operating_h:,.0f} h")
+
+        r5, r6, r7, r8 = st.columns(4)
+        with r5: st.metric(f"Lifetime {dur_product}", f"{total_product_kg:,.1f} kg")
+        with r6: st.metric("Lifetime-average electricity", "—" if np.isnan(lifetime_sec) else f"{lifetime_sec:,.2f} kWh/kg")
+        with r7: st.metric("Production lost to FE decay", f"{production_loss_pct:.1f}%")
+        with r8: st.metric("Replacement-stack cost", f"${total_replacement_cost:,.0f}")
+
+        if carbon_per_product > 0:
+            cc1, cc2 = st.columns(2)
+            with cc1: st.metric("Lifetime fresh CO₂", f"{total_fresh_co2_kg:,.1f} kg")
+            with cc2: st.metric("Fresh CO₂ / product", "—" if np.isnan(kg_co2_per_kg) else f"{kg_co2_per_kg:,.3f} kg/kg")
+
+        replacement_df = pd.DataFrame({"Operating hour": cycle_starts[1:]})
+        voltage_line = alt.Chart(dur_df).mark_line().encode(
+            x=alt.X("Operating hour:Q", title="Cumulative operating hours"),
+            y=alt.Y("Cell voltage (V):Q", title="Cell voltage (V)"),
+            tooltip=[alt.Tooltip("Operating hour:Q", format=",.0f"), "Cycle:Q", alt.Tooltip("Cell voltage (V):Q", format=".3f")],
+        ).properties(height=330, title="Voltage degradation and reset after replacement")
+        if not replacement_df.empty:
+            voltage_line = voltage_line + alt.Chart(replacement_df).mark_rule(strokeDash=[5, 5]).encode(x="Operating hour:Q")
+
+        perf_long_vars = ["Product FE (%)"] + (["Carbon efficiency (%)"] if carbon_per_product > 0 else [])
+        perf_long = dur_df.melt(
+            id_vars=["Operating hour", "Cycle"],
+            value_vars=perf_long_vars,
+            var_name="Performance metric",
+            value_name="Percent",
+        )
+        performance_line = alt.Chart(perf_long).mark_line().encode(
+            x=alt.X("Operating hour:Q", title="Cumulative operating hours"),
+            y=alt.Y("Percent:Q", title="Performance (%)", scale=alt.Scale(domain=[0, 100])),
+            color="Performance metric:N",
+            tooltip=[alt.Tooltip("Operating hour:Q", format=",.0f"), "Cycle:Q", "Performance metric:N", alt.Tooltip("Percent:Q", format=".1f")],
+        ).properties(height=330, title="FE and carbon-efficiency degradation")
+
+        pc1, pc2 = st.columns(2)
+        with pc1: st.altair_chart(voltage_line, use_container_width=True)
+        with pc2: st.altair_chart(performance_line, use_container_width=True)
+
+        if profile_truncated:
+            st.caption(
+                f"Plots show the first {cycles_to_plot} of {total_cycles_operated:,} operating cycles to keep the dashboard responsive. Lifetime metrics above include the full deployment horizon."
+            )
+
+        with st.expander("Cumulative production and downloadable displayed profile", expanded=False):
+            dur_df_download = dur_df.copy()
+            cumulative_chart = alt.Chart(dur_df_download).mark_line().encode(
+                x=alt.X("Operating hour:Q", title="Cumulative operating hours"),
+                y=alt.Y("Cumulative product (kg):Q", title=f"Cumulative {dur_product} (kg)"),
+                tooltip=[alt.Tooltip("Operating hour:Q", format=",.0f"), alt.Tooltip("Cumulative product (kg):Q", format=",.1f")],
+            ).properties(height=330)
+            st.altair_chart(cumulative_chart, use_container_width=True)
+            st.dataframe(dur_df_download, hide_index=True, use_container_width=True)
+            st.download_button(
+                "Download displayed durability profile (CSV)",
+                data=dur_df_download.to_csv(index=False).encode("utf-8"),
+                file_name="cheese_durability_profile.csv",
+                mime="text/csv",
+                key="dur_download",
+            )
+
+        st.info("Interpretation: the replacement interval is controlled by the first threshold reached. Tightening any threshold can increase replacements and downtime even when beginning-of-life performance is unchanged.")
 
 # -------------------- Footer --------------------
 st.markdown("---")
