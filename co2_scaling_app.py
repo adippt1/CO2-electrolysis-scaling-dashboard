@@ -61,11 +61,42 @@ basis_label = st.sidebar.selectbox(
     options=list(MV_OPTIONS.keys()),
     index=0,
     key="global_basis",
-    help="Used to compute gas molar flows from SLPM and gas densities from MW.",
+    help="Used to convert between gas molar flow and volumetric flow, and to calculate gas densities from MW.",
 )
 
 mv_L_per_mol = MV_OPTIONS[basis_label]  # L/mol
 mv_m3_per_mol = mv_L_per_mol / 1000.0  # m³/mol
+
+# Global gas-flow display toggle. Calculations remain internally in SLPM.
+if "_previous_gas_flow_unit" not in st.session_state:
+    st.session_state["_previous_gas_flow_unit"] = "SLPM"
+
+use_sccm_global = st.sidebar.toggle(
+    "Use SCCM for gas flow",
+    value=st.session_state["_previous_gas_flow_unit"] == "SCCM",
+    key="gs_use_sccm",
+    help="OFF = SLPM (L/min); ON = SCCM (mL/min). Existing gas-flow inputs are converted automatically when switched.",
+)
+
+GAS_FLOW_UNIT = "SCCM" if use_sccm_global else "SLPM"
+GAS_FLOW_SCALE = 1000.0 if GAS_FLOW_UNIT == "SCCM" else 1.0
+
+# Convert existing user-entered gas-flow values when the display unit changes.
+_previous_unit = st.session_state["_previous_gas_flow_unit"]
+if GAS_FLOW_UNIT != _previous_unit:
+    _unit_conversion = 1000.0 if GAS_FLOW_UNIT == "SCCM" else 1.0 / 1000.0
+    for _flow_widget_key in ("calc_inlet", "sz_inlet", "cap_cap"):
+        if _flow_widget_key in st.session_state:
+            st.session_state[_flow_widget_key] = float(st.session_state[_flow_widget_key]) * _unit_conversion
+
+    # Keep the selected Area × Stack heatmap gas metric valid after switching units.
+    if "axs_metric" in st.session_state:
+        _old_metric = str(st.session_state["axs_metric"])
+        _old_suffix = f"_{_previous_unit}"
+        if _old_metric.endswith(_old_suffix):
+            st.session_state["axs_metric"] = _old_metric[:-len(_old_suffix)] + f"_{GAS_FLOW_UNIT}"
+
+    st.session_state["_previous_gas_flow_unit"] = GAS_FLOW_UNIT
 
 use_stack_global = st.sidebar.checkbox("Use a stack (multiple identical units)?", value=True, key="gs_stack")
 n_units_global = st.sidebar.number_input("Number of units in stack", min_value=1, value=10, step=1, key="gs_units")
@@ -148,6 +179,34 @@ def mol_s_to_slpm(n_dot: float, molar_volume_L: float) -> float:
 
 def slpm_to_mol_s(flow_slpm: float, molar_volume_L: float) -> float:
     return flow_slpm / (molar_volume_L * 60.0 if molar_volume_L > 0 else np.inf)
+
+def slpm_to_display(flow_slpm: float) -> float:
+    """Convert an internal SLPM value to the selected display unit."""
+    return flow_slpm * GAS_FLOW_SCALE
+
+def display_to_slpm(flow_display: float) -> float:
+    """Convert a user-facing SLPM/SCCM value back to internal SLPM."""
+    return flow_display / GAS_FLOW_SCALE
+
+def format_gas_flow(flow_slpm: float) -> str:
+    """Format an internal SLPM value in the selected display unit."""
+    return f"{slpm_to_display(flow_slpm):,.3f}"
+
+def gas_flow_number_input(
+    base_label: str,
+    default_slpm: float,
+    step_slpm: float,
+    key: str,
+) -> float:
+    """Create a gas-flow input that follows the global SLPM/SCCM toggle."""
+    if key not in st.session_state:
+        st.session_state[key] = slpm_to_display(default_slpm)
+    return st.number_input(
+        f"{base_label} ({GAS_FLOW_UNIT})",
+        min_value=0.0,
+        step=slpm_to_display(step_slpm),
+        key=key,
+    )
 
 def mflow_to_mass_and_vol(n_mol_s: float, MW_g_mol: float, rho_liq_kg_L: Optional[float]) -> Tuple[float, Optional[float]]:
     kg_h = n_mol_s * MW_g_mol * 3600.0 / 1000.0
@@ -237,56 +296,56 @@ def compute_core_products(inp: ElectrolyzerInputs) -> Dict[str, float]:
 def build_sensitivity_table_S(core: Dict[str, float], S_min: float, S_max: float, S_step: float) -> pd.DataFrame:
     co2_min_slpm = core["CO2_min_slpm"]
     gas_prod_slpm = {p: core.get(f"{p}_slpm", 0.0) for p in GASES}
-    gas_prod_total = sum(gas_prod_slpm.values())
+    gas_prod_total_slpm = sum(gas_prod_slpm.values())
 
     S_vals = np.arange(S_min, S_max + 1e-9, S_step)
     rows = []
     for S in S_vals:
         S = max(1.0, float(S))
         util = 1.0 / S
-        co2_in = S * co2_min_slpm
-        co2_out = co2_in - co2_min_slpm
-        gas_total_out = max(1e-9, co2_out + gas_prod_total)
+        co2_in_slpm = S * co2_min_slpm
+        co2_out_slpm = co2_in_slpm - co2_min_slpm
+        gas_total_out_slpm = max(1e-9, co2_out_slpm + gas_prod_total_slpm)
 
         row = {
             "Stoich S (inlet/min)": S,
             "CO2 Utilization (frac)": util,
-            "CO2 Inlet (SLPM)": co2_in,
-            "CO2 Outlet (SLPM)": co2_out,
-            "Gas Total Outlet (SLPM)": gas_total_out,
-            "CO2 vol%": 100 * co2_out / gas_total_out,
+            f"CO2 Inlet ({GAS_FLOW_UNIT})": slpm_to_display(co2_in_slpm),
+            f"CO2 Outlet ({GAS_FLOW_UNIT})": slpm_to_display(co2_out_slpm),
+            f"Gas Total Outlet ({GAS_FLOW_UNIT})": slpm_to_display(gas_total_out_slpm),
+            "CO2 vol%": 100 * co2_out_slpm / gas_total_out_slpm,
         }
         for p in GASES:
-            row[f"{p} (SLPM)"] = gas_prod_slpm[p]
-            row[f"{p} vol%"] = 100 * gas_prod_slpm[p] / gas_total_out
+            row[f"{p} ({GAS_FLOW_UNIT})"] = slpm_to_display(gas_prod_slpm[p])
+            row[f"{p} vol%"] = 100 * gas_prod_slpm[p] / gas_total_out_slpm
         rows.append(row)
     return pd.DataFrame(rows)
 
 def build_sensitivity_table_U(core: Dict[str, float], Umin_pct: float, Umax_pct: float, Ustep_pct: float) -> pd.DataFrame:
     co2_min_slpm = core["CO2_min_slpm"]
     gas_prod_slpm = {p: core.get(f"{p}_slpm", 0.0) for p in GASES}
-    gas_prod_total = sum(gas_prod_slpm.values())
+    gas_prod_total_slpm = sum(gas_prod_slpm.values())
 
     U_vals_pct = np.arange(Umin_pct, Umax_pct + 1e-9, Ustep_pct)
     rows = []
     for U_pct in U_vals_pct:
         U = max(1e-6, min(1.0, U_pct / 100.0))
         S = 1.0 / U
-        co2_in = S * co2_min_slpm
-        co2_out = co2_in - co2_min_slpm
-        gas_total_out = max(1e-9, co2_out + gas_prod_total)
+        co2_in_slpm = S * co2_min_slpm
+        co2_out_slpm = co2_in_slpm - co2_min_slpm
+        gas_total_out_slpm = max(1e-9, co2_out_slpm + gas_prod_total_slpm)
 
         row = {
             "Utilization (%)": U_pct,
             "Stoich S (inlet/min)": S,
-            "CO2 Inlet (SLPM)": co2_in,
-            "CO2 Outlet (SLPM)": co2_out,
-            "Gas Total Outlet (SLPM)": gas_total_out,
-            "CO2 vol%": 100 * co2_out / gas_total_out,
+            f"CO2 Inlet ({GAS_FLOW_UNIT})": slpm_to_display(co2_in_slpm),
+            f"CO2 Outlet ({GAS_FLOW_UNIT})": slpm_to_display(co2_out_slpm),
+            f"Gas Total Outlet ({GAS_FLOW_UNIT})": slpm_to_display(gas_total_out_slpm),
+            "CO2 vol%": 100 * co2_out_slpm / gas_total_out_slpm,
         }
         for p in GASES:
-            row[f"{p} (SLPM)"] = gas_prod_slpm[p]
-            row[f"{p} vol%"] = 100 * gas_prod_slpm[p] / gas_total_out
+            row[f"{p} ({GAS_FLOW_UNIT})"] = slpm_to_display(gas_prod_slpm[p])
+            row[f"{p} vol%"] = 100 * gas_prod_slpm[p] / gas_total_out_slpm
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -327,7 +386,7 @@ with tab_instructions:
         
         - **Calc: Area from Inlet & Stoich:**  
           Provides the **required electrode area** per unit and total area for a given CO₂ inlet and stoichiometric ratio (S).  
-          Includes per-product outputs (gas SLPM, liquid kg/h, etc.).
+          Includes per-product outputs (gas flow in the selected SLPM/SCCM unit, liquid kg/h, etc.).
     
         - **Sensitivity: CO₂ Utilization:**  
           Sweeps utilization (%) to show gas outlet composition and flowrate trends.
@@ -344,6 +403,7 @@ with tab_instructions:
         💡**Tips:**  
         - You can download any result table via the “Download CSV” buttons.  
         - Hover over plots for tooltips showing precise data points.  
+        - Use the sidebar toggle to display all gas flows in **SLPM** or **SCCM**.
         - Adjust **molar volume basis (STP/SATP)** in the sidebar to update gas volumetric conversions.
         - If you find any mistakes please feel free to [reach out](https://people.llnl.gov/prajapati3)!
     
@@ -357,6 +417,7 @@ with tab_instructions:
   • STP = `{MV_OPTIONS['STP (0°C, 1 atm) — 22.414 L/mol']:.3f}` L·mol⁻¹  
   • SATP = `{MV_OPTIONS['SATP (25°C, 1 atm) — 24.465 L/mol']:.3f}` L·mol⁻¹  
 - **Current basis:** `{basis_label}`  
+- **Gas flow display unit:** `{GAS_FLOW_UNIT}`  
 - **Stacking:** `{'ON' if use_stack_global else 'OFF'}` — Units: `{n_units_global}`  
 - **Gas products:** {", ".join(GASES) if GASES else "None"}  
 - **Liquid products (treated as condensed):** {", ".join(LIQUIDS) if LIQUIDS else "None"}  
@@ -454,12 +515,32 @@ with tab_calc:
     fe_map_pct: Dict[str, float] = fe_grid_inputs("calc", PRODUCT_LIST, title="FE split (%)")
 
     st.divider()
-    mode = st.radio("CO₂ feed input mode", ["Stoich (S)", "Inlet flow (SLPM)"], index=0, horizontal=True, key="calc_mode")
-    if mode == "Stoich (S)":
+
+    # Migrate an older saved radio value if this app is hot-reloaded in an existing session.
+    if st.session_state.get("calc_mode") in {"Stoich (S)", "Inlet flow (SLPM)", "Inlet flow (SCCM)"}:
+        st.session_state["calc_mode"] = (
+            "stoich" if st.session_state["calc_mode"] == "Stoich (S)" else "inlet"
+        )
+
+    mode = st.radio(
+        "CO₂ feed input mode",
+        options=["stoich", "inlet"],
+        index=0,
+        horizontal=True,
+        key="calc_mode",
+        format_func=lambda choice: "Stoich (S)" if choice == "stoich" else f"Inlet flow ({GAS_FLOW_UNIT})",
+    )
+    if mode == "stoich":
         S = st.number_input("CO₂ Stoich S (inlet/min)", min_value=1.0, value=2.0, step=0.1, key="calc_S")
         co2_in_slpm_input = None
     else:
-        co2_in_slpm_input = st.number_input("CO₂ Inlet flow (SLPM)", min_value=0.0, value=10.0, step=0.5, key="calc_inlet")
+        co2_in_display_input = gas_flow_number_input(
+            "CO₂ Inlet flow",
+            default_slpm=10.0,
+            step_slpm=0.5,
+            key="calc_inlet",
+        )
+        co2_in_slpm_input = display_to_slpm(co2_in_display_input)
         S = None
 
     n_units_effective = n_units_global if use_stack_global else 1
@@ -473,12 +554,12 @@ with tab_calc:
 
     # Determine inlet, S, utilization
     if core["CO2_min_slpm"] <= EPS:
-        co2_in_slpm = 0.0 if (mode == "Stoich (S)") else float(co2_in_slpm_input or 0.0)
-        Stoich_S = (np.inf if co2_in_slpm > 0 else 1.0) if mode != "Stoich (S)" else float(S or 1.0)
+        co2_in_slpm = 0.0 if (mode == "stoich") else float(co2_in_slpm_input or 0.0)
+        Stoich_S = (np.inf if co2_in_slpm > 0 else 1.0) if mode != "stoich" else float(S or 1.0)
         util = 0.0 if co2_in_slpm > 0 else 1.0
         warn = "Total FE to carbon products is zero; CO₂ minimum is 0."
     else:
-        if mode == "Stoich (S)":
+        if mode == "stoich":
             Stoich_S = max(1.0, float(S or 1.0))
             co2_in_slpm = Stoich_S * core["CO2_min_slpm"]
             util = 1.0 / Stoich_S
@@ -487,13 +568,16 @@ with tab_calc:
             co2_in_slpm = max(0.0, float(co2_in_slpm_input or 0.0))
             Stoich_S = co2_in_slpm / max(core["CO2_min_slpm"], EPS)
             util = min(1.0, 1.0 / max(Stoich_S, EPS))
-            warn = None if co2_in_slpm >= core["CO2_min_slpm"] else f"Inlet ({co2_in_slpm:.3f} SLPM) < minimum ({core['CO2_min_slpm']:.3f} SLPM)."
+            warn = None if co2_in_slpm >= core["CO2_min_slpm"] else (
+                f"Inlet ({format_gas_flow(co2_in_slpm)} {GAS_FLOW_UNIT}) < "
+                f"minimum ({format_gas_flow(core['CO2_min_slpm'])} {GAS_FLOW_UNIT})."
+            )
 
     # GAS metrics
     st.subheader("Gas-side Results (true outlet)")
     g1, g2, g3, g4 = st.columns(4)
-    with g1: st.metric("CO₂ Minimum (SLPM)", f"{core['CO2_min_slpm']:.3f}")
-    with g2: st.metric("CO₂ Inlet (SLPM)", f"{co2_in_slpm:.3f}")
+    with g1: st.metric(f"CO₂ Minimum ({GAS_FLOW_UNIT})", format_gas_flow(core["CO2_min_slpm"]))
+    with g2: st.metric(f"CO₂ Inlet ({GAS_FLOW_UNIT})", format_gas_flow(co2_in_slpm))
     with g3: st.metric("Stoich S (inlet/min)", "∞" if not np.isfinite(Stoich_S) else f"{Stoich_S:.3f}")
     with g4: st.metric("Utilization (%)", f"{util*100:.1f}")
 
@@ -502,13 +586,13 @@ with tab_calc:
     with g6: st.metric("Total Current (A)", f"{core['I_total_A']:.2f}")
     with g7: st.metric("Power (kW)", f"{(core['I_total_A']*V_cell)/1000.0:.2f}")
 
-    st.markdown("#### Gas product flowrates (SLPM)")
+    st.markdown(f"#### Gas product flowrates ({GAS_FLOW_UNIT})")
     gas_cols = st.columns(max(1, len(GASES)))
     for i, p in enumerate(GASES):
         with gas_cols[i]:
-            st.metric(p, f"{core.get(f'{p}_slpm', 0.0):.3f}")
-    gas_total_out = sum(core.get(f"{p}_slpm", 0.0) for p in GASES) + max(co2_in_slpm - core["CO2_min_slpm"], 0.0)
-    st.metric("Gas Total Outlet (SLPM)", f"{gas_total_out:.3f}")
+            st.metric(p, format_gas_flow(core.get(f"{p}_slpm", 0.0)))
+    gas_total_out_slpm = sum(core.get(f"{p}_slpm", 0.0) for p in GASES) + max(co2_in_slpm - core["CO2_min_slpm"], 0.0)
+    st.metric(f"Gas Total Outlet ({GAS_FLOW_UNIT})", format_gas_flow(gas_total_out_slpm))
 
     # LIQUID metrics
     st.subheader("Liquid production (true condensed)")
@@ -540,7 +624,13 @@ with tab_size:
     units_used = n_units_global if use_stack_global else 1
     col1, col2, col3 = st.columns(3)
     with col1:
-        co2_in_slpm_sz = st.number_input("CO₂ Inlet (SLPM)", min_value=0.0, value=50.0, step=1.0, key="sz_inlet")
+        co2_in_display_sz = gas_flow_number_input(
+            "CO₂ Inlet",
+            default_slpm=50.0,
+            step_slpm=1.0,
+            key="sz_inlet",
+        )
+        co2_in_slpm_sz = display_to_slpm(co2_in_display_sz)
         S_sz = st.number_input("Stoich S (inlet/min)", min_value=1.0, value=2.0, step=0.1, key="sz_S")
     with col2:
         j_val_sz = st.number_input("Current density", min_value=0.0, value=200.0, step=10.0, key="sz_j")
@@ -602,15 +692,15 @@ with tab_size:
             st.metric(f"Per-unit area ({area_unit_label})", fmt_per_unit.format(per_unit_area_display))
             st.metric("Power (kW)", f"{P_total_kW_sz:.2f}")
         with c3:
-            st.metric("CO₂ Minimum (SLPM)", f"{co2_min_slpm_sz:.3f}")
+            st.metric(f"CO₂ Minimum ({GAS_FLOW_UNIT})", format_gas_flow(co2_min_slpm_sz))
             st.metric("Utilization (%)", f"{util_sz*100:.1f}")
 
-        st.subheader("Resulting Gas Products (SLPM)")
+        st.subheader(f"Resulting Gas Products ({GAS_FLOW_UNIT})")
         if gas_rows:
             colsG = st.columns(len(gas_rows))
             for i, (p, slpm_p) in enumerate(gas_rows):
-                with colsG[i]: st.metric(p, f"{slpm_p:.3f}")
-            st.write(f"**Gas products total (SLPM)**: {gas_total_slpm:.3f}")
+                with colsG[i]: st.metric(p, format_gas_flow(slpm_p))
+            st.write(f"**Gas products total ({GAS_FLOW_UNIT})**: {format_gas_flow(gas_total_slpm)}")
 
         st.subheader("Resulting Liquid Products")
         if liq_rows:
@@ -646,14 +736,19 @@ with tab_s2:
 
     df_util = build_sensitivity_table_U(core_u, Umin, Umax, Ustep)
 
-    value_vars_flows = ["CO2 Outlet (SLPM)"] + [f"{p} (SLPM)" for p in GASES]
-    df_flows = df_util.melt(id_vars=["Utilization (%)"], value_vars=value_vars_flows, var_name="Stream", value_name="SLPM")
+    value_vars_flows = [f"CO2 Outlet ({GAS_FLOW_UNIT})"] + [f"{p} ({GAS_FLOW_UNIT})" for p in GASES]
+    df_flows = df_util.melt(
+        id_vars=["Utilization (%)"],
+        value_vars=value_vars_flows,
+        var_name="Stream",
+        value_name=GAS_FLOW_UNIT,
+    )
     chart_flows = alt.Chart(df_flows).mark_line(point=True).encode(
         x=alt.X("Utilization (%):Q"),
-        y=alt.Y("SLPM:Q"),
+        y=alt.Y(f"{GAS_FLOW_UNIT}:Q", title=f"Gas flow ({GAS_FLOW_UNIT})"),
         color="Stream:N",
-        tooltip=["Utilization (%)","Stream","SLPM"]
-    ).properties(title="Outlet gas flows vs Utilization (%)", height=320)
+        tooltip=["Utilization (%)", "Stream", GAS_FLOW_UNIT],
+    ).properties(title=f"Outlet gas flows vs Utilization (%) [{GAS_FLOW_UNIT}]", height=320)
 
     df_sens_S = build_sensitivity_table_S(core_u, S_min=1.0, S_max=max(1.0, 1.0/(Umin/100.0)), S_step=0.5)
     value_vars_comp = ["CO2 vol%"] + [f"{p} vol%" for p in GASES]
@@ -679,7 +774,7 @@ with tab_s2:
 
 # -------------------- Tab: Sensitivity — Area × Stack / CO₂ Cap --------------------
 with tab_s3:
-    st.subheader("Sensitivity: Area × Stack (gas SLPM + liquid kg/h) + CO₂ Cap")
+    st.subheader(f"Sensitivity: Area × Stack (gas {GAS_FLOW_UNIT} + liquid kg/h) + CO₂ Cap")
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -729,14 +824,28 @@ with tab_s3:
             co2_in_slpm = S1 * co2_min_slpm
             P_total_kW = (I_total * V_cell1) / 1000.0
 
-            row = {"Area_cm2": area_cm2, "Units": int(n_units1), "CO2_min_SLPM": co2_min_slpm, "CO2_in_SLPM": co2_in_slpm, "Power_kW": P_total_kW}
-            for p in GASES:   row[f"{p}_SLPM"] = gas_slpm_map.get(p, 0.0)
-            for p in LIQUIDS: row[f"{p}_kg_h"]  = liq_kg_h_map.get(p, 0.0)
+            row = {
+                "Area_cm2": area_cm2,
+                "Units": int(n_units1),
+                f"CO2_min_{GAS_FLOW_UNIT}": slpm_to_display(co2_min_slpm),
+                f"CO2_in_{GAS_FLOW_UNIT}": slpm_to_display(co2_in_slpm),
+                "Power_kW": P_total_kW,
+            }
+            for p in GASES:
+                row[f"{p}_{GAS_FLOW_UNIT}"] = slpm_to_display(gas_slpm_map.get(p, 0.0))
+            for p in LIQUIDS:
+                row[f"{p}_kg_h"] = liq_kg_h_map.get(p, 0.0)
             rows.append(row)
 
     df_grid = pd.DataFrame(rows)
 
-    metric_choices = [f"{p}_SLPM" for p in GASES] + [f"{p}_kg_h" for p in LIQUIDS] + ["CO2_in_SLPM", "CO2_min_SLPM", "Power_kW"]
+    co2_min_grid_col = f"CO2_min_{GAS_FLOW_UNIT}"
+    co2_in_grid_col = f"CO2_in_{GAS_FLOW_UNIT}"
+    metric_choices = (
+        [f"{p}_{GAS_FLOW_UNIT}" for p in GASES]
+        + [f"{p}_kg_h" for p in LIQUIDS]
+        + [co2_in_grid_col, co2_min_grid_col, "Power_kW"]
+    )
     metric = st.selectbox("Heatmap metric", metric_choices, index=0, key="axs_metric")
     heat = alt.Chart(df_grid).mark_rect().encode(
         x=alt.X("Area_cm2:O", title="Area per unit (cm²)"),
@@ -756,23 +865,28 @@ with tab_s3:
 
     st.markdown("---")
     st.subheader("CO₂ Supply Cap (quick check)")
-    co2_cap = st.number_input("CO₂ supply cap (SLPM)", min_value=0.0, value=50.0, step=1.0, key="cap_cap")
+    co2_cap = gas_flow_number_input(
+        "CO₂ supply cap",
+        default_slpm=50.0,
+        step_slpm=1.0,
+        key="cap_cap",
+    )
 
     if not df_grid.empty:
         row0 = df_grid.iloc[0]
-        co2_min_slpm2 = float(row0["CO2_min_SLPM"])
+        co2_min_display2 = float(row0[co2_min_grid_col])
     else:
-        co2_min_slpm2 = 0.0
+        co2_min_display2 = 0.0
 
-    S_min_cap = (co2_cap / max(co2_min_slpm2, EPS)) if co2_min_slpm2 > 0 else np.inf
+    S_min_cap = (co2_cap / max(co2_min_display2, EPS)) if co2_min_display2 > 0 else np.inf
     util_max_cap = min(1.0, 1.0 / max(S_min_cap, EPS))
 
     c1, c2, c3 = st.columns(3)
-    with c1: st.metric("CO₂ Minimum (SLPM)", f"{co2_min_slpm2:.3f}")
-    with c2: st.metric("CO₂ Cap (SLPM)", f"{co2_cap:.3f}")
+    with c1: st.metric(f"CO₂ Minimum ({GAS_FLOW_UNIT})", f"{co2_min_display2:,.3f}")
+    with c2: st.metric(f"CO₂ Cap ({GAS_FLOW_UNIT})", f"{co2_cap:,.3f}")
     with c3: st.metric("Max Utilization allowed", f"{100*util_max_cap:.1f}%")
 
-    if np.isinf(S_min_cap) or co2_cap < co2_min_slpm2:
+    if np.isinf(S_min_cap) or co2_cap < co2_min_display2:
         st.warning("Cap is below the theoretical minimum CO₂ required at these operating conditions. Reduce current (j), area, units, or adjust FE split.")
     else:
         st.success("Feasible. You may increase utilization up to the shown maximum by reducing S accordingly.")
