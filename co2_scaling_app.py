@@ -293,6 +293,11 @@ def make_sankey_figure(
                 arrangement="snap",
                 valueformat=".3f",
                 valuesuffix=f" {GAS_FLOW_UNIT} CO₂-eq",
+                textfont=dict(
+                    family="Arial Black, Arial, Helvetica, sans-serif",
+                    size=15,
+                    color="black",
+                ),
                 node=dict(
                     label=labels,
                     color=node_colors,
@@ -312,13 +317,21 @@ def make_sankey_figure(
         ]
     )
     fig.update_layout(
-        title=dict(text=title, x=0.01, xanchor="left", font=dict(size=18, color="#172026")),
-        font=dict(family="Arial, Helvetica, sans-serif", size=14, color="#172026"),
+        title=dict(text=title, x=0.01, xanchor="left", font=dict(family="Arial Black, Arial, Helvetica, sans-serif", size=18, color="black")),
+        font=dict(family="Arial Black, Arial, Helvetica, sans-serif", size=15, color="black"),
         paper_bgcolor="#FFFFFF",
         plot_bgcolor="#FFFFFF",
-        hoverlabel=dict(bgcolor="#FFFFFF", font=dict(family="Arial, Helvetica, sans-serif", size=13, color="#172026")),
+        hoverlabel=dict(bgcolor="#FFFFFF", bordercolor="black", font=dict(family="Arial Black, Arial, Helvetica, sans-serif", size=13, color="black")),
         height=height,
         margin=dict(l=18, r=18, t=70, b=18),
+    )
+    fig.update_traces(
+        textfont=dict(
+            family="Arial Black, Arial, Helvetica, sans-serif",
+            size=15,
+            color="black",
+        ),
+        selector=dict(type="sankey"),
     )
     return fig
 
@@ -960,27 +973,133 @@ with tab_carbon:
     )
 
     with st.expander("How the two workflows differ", expanded=True):
-        st.markdown(r"""
-        **Planning mode** starts from current and the shared Faradaic-efficiency split:
+        st.markdown(
+            r"""
+**Planning mode** starts from the applied current and the shared
+Faradaic-efficiency distribution. The molar production rate of product
+\(i\) is:
+            """
+        )
 
-        \[
-        \dot n_i=\frac{I\,FE_i}{n_{e,i}F},\qquad
-        \dot n_{CO_2,product}=\sum_i \nu_{CO_2,i}\dot n_i
-        \]
+        st.latex(
+            r"""
+            \dot{n}_i
+            =
+            \frac{I\,FE_i}{n_{e,i}F}
+            """
+        )
 
-        You then assume carbonate/bicarbonate formation, product recovery, and recycle to estimate carbon efficiency and fresh-feed demand.
+        st.markdown(
+            r"""
+The total rate of CO₂ incorporated into all carbon-containing products is:
+            """
+        )
 
-        **Experimental mode** starts from measured inlet flow \(V_1\), measured total cathode outlet flow \(V_2\), and GC composition. For the CO/H₂-only manuscript case:
+        st.latex(
+            r"""
+            \dot{n}_{\mathrm{CO_2,product}}
+            =
+            \sum_i
+            \nu_{\mathrm{CO_2},i}\,
+            \dot{n}_i
+            """
+        )
 
-        \[
-        V_{CO_2,leftover}=V_2(1-c_{CO}-c_{H_2})
-        \]
-        \[
-        V_{CO_2,loss}=V_1-V_2+V_2c_{H_2}
-        \]
+        st.markdown(
+            r"""
+where:
 
-        CHEESE also supports CH₄, C₂H₄, optional liquid-product carbon, and corrections for salt, dissolved-carbon accumulation, product crossover, and other identified losses.
-        """)
+- \(I\) is the total current.
+- \(FE_i\) is the Faradaic efficiency of product \(i\), expressed as a fraction.
+- \(n_{e,i}\) is the number of electrons required per mole of product \(i\).
+- \(F\) is Faraday's constant.
+- \(\nu_{\mathrm{CO_2},i}\) is the number of CO₂ molecules incorporated per molecule of product \(i\).
+
+You then specify carbonate/bicarbonate formation, product recovery,
+anode-side carbon recovery, and CO₂ recycle. CHEESE uses these assumptions
+to estimate carbon efficiency, fresh-feed demand, and the distribution of
+carbon among the different pathways.
+
+---
+
+**Experimental mode** starts from the measured CO₂ inlet flow
+\(V_1\), measured total cathode outlet flow \(V_2\), and the dry-gas
+composition measured by GC.
+
+For an outlet containing only CO₂, CO, and H₂, the leftover CO₂ flow is:
+            """
+        )
+
+        st.latex(
+            r"""
+            V_{\mathrm{CO_2,leftover}}
+            =
+            V_2
+            \left(
+            1-c_{\mathrm{CO}}-c_{\mathrm{H_2}}
+            \right)
+            """
+        )
+
+        st.markdown(
+            r"""
+The CO₂-equivalent carbon converted to CO is:
+            """
+        )
+
+        st.latex(
+            r"""
+            V_{\mathrm{CO_2,converted}}
+            =
+            V_2c_{\mathrm{CO}}
+            """
+        )
+
+        st.markdown(
+            r"""
+The residual CO₂ loss obtained from the carbon balance is:
+            """
+        )
+
+        st.latex(
+            r"""
+            V_{\mathrm{CO_2,loss}}
+            =
+            V_1
+            -
+            V_{\mathrm{CO_2,leftover}}
+            -
+            V_{\mathrm{CO_2,converted}}
+            """
+        )
+
+        st.markdown(
+            r"""
+Substituting the expressions for leftover CO₂ and converted CO₂ gives:
+            """
+        )
+
+        st.latex(
+            r"""
+            V_{\mathrm{CO_2,loss}}
+            =
+            V_1-V_2+V_2c_{\mathrm{H_2}}
+            """
+        )
+
+        st.markdown(
+            r"""
+CHEESE also supports CH₄, C₂H₄, optional liquid-product carbon, and
+corrections for salt precipitation, dissolved-carbon accumulation,
+product crossover, directly measured anode CO₂, and other identified
+carbon-loss pathways.
+
+The experimentally calculated residual should initially be interpreted as
+**unaccounted CO₂-equivalent carbon loss**. It represents inorganic-carbon
+crossover only after other possible carbon-loss pathways have been ruled
+out or explicitly corrected.
+            """
+        )
 
     st.markdown("### 1. Electrochemical operating point")
     c1, c2, c3, c4 = st.columns(4)
