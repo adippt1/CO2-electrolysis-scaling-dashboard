@@ -1,6 +1,6 @@
 # CHEESE — CO₂ Handling & Electrolyzer Efficiency Scaling Evaluator
 # Tagline: Because scaling electrolysis shouldn’t be this gouda! 🧀
-# Author: Aditya Prajapati
+# Author: Aditya Prajapati 
 # Copyright (c) 2025 Aditya Prajapati
 # Dependencies: streamlit, numpy, pandas, altair, plotly
 
